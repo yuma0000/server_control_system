@@ -1,0 +1,6 @@
+{
+  "name": "Server Management System",
+  "description": "Railway-integrated server management dashboard for running scripts in isolated sandboxes, scheduling tasks, viewing real-time execution logs, managing Railway environment variables, and persisting configuration data.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
