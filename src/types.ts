@@ -25,7 +25,7 @@ export interface Program {
   code?: string; // Legacy fallback
   status: ProgramStatus;
   schedule: ScheduleConfig;
-  timeoutSec: number; // Max execution timeout in seconds
+  timeoutSec?: number; // Optional execution timeout in seconds (0 or undefined = unlimited)
   envVars: Record<string, string>;
   createdAt: string;
   updatedAt: string;

@@ -49,7 +49,6 @@ export const CodeEditorModal: React.FC<CodeEditorModalProps> = ({
   const [name, setName] = useState(program?.name || '');
   const [description, setDescription] = useState(program?.description || '');
   const [language, setLanguage] = useState<ProgramLanguage>(program?.language || 'nodejs');
-  const [timeoutSec, setTimeoutSec] = useState(program?.timeoutSec || 30);
   
   // Multi-file state
   const [files, setFiles] = useState<CodeFile[]>([]);
@@ -75,7 +74,6 @@ export const CodeEditorModal: React.FC<CodeEditorModalProps> = ({
       setName(program.name);
       setDescription(program.description);
       setLanguage(program.language);
-      setTimeoutSec(program.timeoutSec || 30);
       setEnvPairs(program.envVars ? Object.entries(program.envVars).map(([key, value]) => ({ key, value })) : []);
       setScheduleEnabled(program.schedule?.enabled || false);
       setTimeStr(program.schedule?.timeStr || '12:00');
@@ -98,7 +96,6 @@ export const CodeEditorModal: React.FC<CodeEditorModalProps> = ({
       setName('新規プログラム');
       setDescription('');
       setLanguage('nodejs');
-      setTimeoutSec(30);
       setEnvPairs([]);
       setScheduleEnabled(false);
       setTimeStr('09:00');
@@ -223,7 +220,7 @@ export const CodeEditorModal: React.FC<CodeEditorModalProps> = ({
       language,
       files,
       code: entryFile ? entryFile.content : '',
-      timeoutSec: Number(timeoutSec) || 30,
+      timeoutSec: 0,
       envVars: envVarsRecord,
       schedule: {
         enabled: scheduleEnabled,
@@ -322,16 +319,12 @@ export const CodeEditorModal: React.FC<CodeEditorModalProps> = ({
               />
             </div>
 
-            <div className="space-y-1.5">
-              <label className="font-semibold text-slate-300">タイムアウト (秒)</label>
-              <input
-                type="number"
-                min="5"
-                max="300"
-                value={timeoutSec}
-                onChange={(e) => setTimeoutSec(Number(e.target.value))}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-indigo-500 font-mono"
-              />
+            <div className="space-y-1.5 font-mono">
+              <label className="font-semibold text-slate-300">実行制限仕様</label>
+              <div className="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-xs text-emerald-400 flex items-center space-x-1.5 font-medium">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                <span>無制限実行 (タイムアウトなし)</span>
+              </div>
             </div>
           </div>
 
