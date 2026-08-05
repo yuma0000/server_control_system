@@ -53,10 +53,23 @@ export interface RailwayEnvVar {
   isSecret?: boolean;
 }
 
+export interface ProcessFileEntry {
+  filename: string;
+  relativePath: string;
+  sizeBytes: number;
+  updatedAt: string;
+  isEntry?: boolean;
+  content?: string;
+  isDirectory?: boolean;
+}
+
 export interface SystemStatus {
   connected: boolean;
   serverUptimeSec: number;
   memoryUsageMb: number;
+  heapUsedMb?: number;
+  heapTotalMb?: number;
+  rssMb?: number;
   cpuPercent: number;
   runningProgramsCount: number;
   totalProgramsCount: number;

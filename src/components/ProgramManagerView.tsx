@@ -14,9 +14,11 @@ import {
   FileCode,
   ChevronDown,
   ChevronRight,
-  Star
+  Star,
+  RefreshCw
 } from 'lucide-react';
 import { Program } from '../types';
+import { DirectoryInspectorModal } from './DirectoryInspectorModal';
 
 interface ProgramManagerViewProps {
   programs: Program[];
@@ -24,6 +26,7 @@ interface ProgramManagerViewProps {
   onStopProgram: (id: string) => void;
   onDeleteProgram: (id: string) => void;
   onOpenEditModal: (program?: Program) => void;
+  isProcessing?: boolean;
 }
 
 export const ProgramManagerView: React.FC<ProgramManagerViewProps> = ({
@@ -31,7 +34,8 @@ export const ProgramManagerView: React.FC<ProgramManagerViewProps> = ({
   onRunProgram,
   onStopProgram,
   onDeleteProgram,
-  onOpenEditModal
+  onOpenEditModal,
+  isProcessing = false
 }) => {
   const [search, setSearch] = useState('');
   const [selectedLanguage, setSelectedLanguage] = useState<string>('ALL');
@@ -41,6 +45,9 @@ export const ProgramManagerView: React.FC<ProgramManagerViewProps> = ({
 
   // Custom modal for deleting program without relying on window.confirm
   const [programToDelete, setProgramToDelete] = useState<Program | null>(null);
+
+  // Inspector Modal state
+  const [inspectProgram, setInspectProgram] = useState<Program | null>(null);
 
   const toggleCardCollapse = (id: string) => {
     setCollapsedCards(prev => ({ ...prev, [id]: !prev[id] }));
@@ -69,7 +76,8 @@ export const ProgramManagerView: React.FC<ProgramManagerViewProps> = ({
 
         <button
           onClick={() => onOpenEditModal()}
-          className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center space-x-2 shadow-lg shadow-indigo-600/30 transition-all active:scale-95 shrink-0"
+          disabled={isProcessing}
+          className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center space-x-2 shadow-lg shadow-indigo-600/30 transition-all active:scale-95 shrink-0 disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
         >
           <Plus className="w-4 h-4" />
           <span>新規プロセスを作成</span>
@@ -245,7 +253,7 @@ export const ProgramManagerView: React.FC<ProgramManagerViewProps> = ({
 
                   {/* Execution Stats */}
                   <div className="pt-2 text-[11px] text-slate-400 flex items-center justify-between border-t border-slate-800/80">
-                    <span>タイムアウト: {program.timeoutSec || 30}秒</span>
+                    <span className="text-emerald-400 font-medium">タイムアウト: なし (無制限実行)</span>
                     {program.lastRunDurationMs ? (
                       <span>直前実行時間: {(program.lastRunDurationMs / 1000).toFixed(2)}s</span>
                     ) : (
@@ -255,47 +263,73 @@ export const ProgramManagerView: React.FC<ProgramManagerViewProps> = ({
                 </div>
 
                 {/* Action Bar */}
-                <div className="pt-3 border-t border-slate-800 flex items-center justify-between gap-2">
-                  <div className="flex items-center space-x-2">
+                <div className="pt-3 border-t border-slate-800 flex items-center justify-between gap-1.5">
+                  <div className="flex items-center space-x-1.5 flex-wrap gap-y-1">
                     {program.status === 'RUNNING' ? (
                       <button
                         onClick={() => onStopProgram(program.id)}
-                        className="px-3 py-1.5 rounded-lg bg-rose-600/20 hover:bg-rose-600/30 text-rose-400 border border-rose-500/30 text-xs font-semibold flex items-center space-x-1.5 transition-all"
+                        disabled={isProcessing}
+                        className="px-2.5 py-1.5 rounded-lg bg-rose-600/20 hover:bg-rose-600/30 text-rose-400 border border-rose-500/30 text-xs font-semibold flex items-center space-x-1 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        <Square className="w-3.5 h-3.5 fill-current" />
+                        <Square className="w-3 h-3 fill-current" />
                         <span>停止</span>
                       </button>
                     ) : (
                       <button
                         onClick={() => onRunProgram(program.id)}
-                        className="px-3 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-500/30 text-xs font-semibold flex items-center space-x-1.5 transition-all"
+                        disabled={isProcessing || program.status === 'RUNNING'}
+                        className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white shadow-md shadow-emerald-600/20 text-xs font-semibold flex items-center space-x-1 transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none active:scale-95"
+                        title={program.status === 'RUNNING' ? 'すでに実行中のため二重起動不可' : '実行'}
                       >
-                        <Play className="w-3.5 h-3.5 fill-current" />
-                        <span>実行</span>
+                        {isProcessing ? (
+                          <RefreshCw className="w-3 h-3 animate-spin" />
+                        ) : (
+                          <Play className="w-3 h-3 fill-current" />
+                        )}
+                        <span>{isProcessing ? '処理中' : '実行'}</span>
                       </button>
                     )}
 
                     <button
-                      onClick={() => onOpenEditModal(program)}
-                      className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-medium flex items-center space-x-1.5 transition-all"
+                      onClick={() => setInspectProgram(program)}
+                      className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-indigo-300 border border-slate-700 text-xs font-medium flex items-center space-x-1 transition-all"
+                      title="プロセス分離フォルダ内を表示"
                     >
-                      <Edit3 className="w-3.5 h-3.5" />
-                      <span>構成編集</span>
+                      <Folder className="w-3 h-3 text-indigo-400" />
+                      <span>フォルダ内</span>
+                    </button>
+
+                    <button
+                      onClick={() => onOpenEditModal(program)}
+                      disabled={isProcessing || program.status === 'RUNNING'}
+                      className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-medium flex items-center space-x-1 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <Edit3 className="w-3 h-3" />
+                      <span>編集</span>
                     </button>
                   </div>
 
                   <button
                     onClick={() => setProgramToDelete(program)}
-                    className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
+                    disabled={isProcessing || program.status === 'RUNNING'}
+                    className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     title="削除"
                   >
-                    <Trash2 className="w-4 h-4" />
+                    <Trash2 className="w-3.5 h-3.5" />
                   </button>
                 </div>
               </div>
             );
           })}
         </div>
+      )}
+
+      {/* Directory Inspector Modal */}
+      {inspectProgram && (
+        <DirectoryInspectorModal
+          program={inspectProgram}
+          onClose={() => setInspectProgram(null)}
+        />
       )}
 
       {/* Delete Confirmation Modal */}

@@ -18,7 +18,8 @@ export const TechSpecView: React.FC = () => {
 
 ## 1. システム概要 (System Overview)
 本システムは、**Railway パース(PaaS)** クラウド環境上でマルチ言語プログラム (Node.js, Python, Bash, PHP, Ruby) をサンドボックス安全に実行・停止・管理・時間指定予約 (スケジュール) 実行し、ログ確認や環境変数の動的制御を行うための統合管理ポータルシステムです。
-最新アップデートにより、1つのプロセスに対する複数ファイル構造 (マルチコード・データ)、プロセス分離型ストレージ、ファイル読込機能、ファイル名変更、コード折りたたみ表示に対応しました。
+
+最新の仕様改定により、**タイムアウト制限の解除 (無制限実行)**、**プロセス別独立ディレクトリ (/data/processes/<programId>) のファイル一覧・プレビュー機能**、**メモリ消費原因の分析と最適化 (V8 Heap/配列の上限制御)**、および **二重稼働防止のためのUIボタンロックとHTTP 409重複保護** が実装されました。
 
 ---
 
@@ -26,66 +27,53 @@ export const TechSpecView: React.FC = () => {
 Railway はコンテナの再起動や再デプロイ時にエフェメラル(一時的)なファイルシステムが初期化される特性を持っています。本システムではこの課題を解決するため、**ハイブリッド同期持続化モデル (Client-Server State Sync)** を採用しています。
 
 - **Primary State Storage**: \`/data/server_state.json\`
-- **Process Isolated Storage**: \`/data/processes/<programId>/\` (各プロセス専用のストレージディレクトリ)
+- **Process Isolated Storage**: \`/data/processes/<programId>/\` (各プロセス専用の隔離ストレージディレクトリ)
 - **Backup / Source of Truth (Client)**: ブラウザの \`localStorage\` (\`RAILWAY_SERVER_MGMT_STATE_V1\`)
-- **同期メカニズム**:
-  1. **Boot Sync**: Railway 起動時、サーバ内にデータが無い場合クライアントがバックアップを自動適用。
-  2. **Manual & Periodical Sync**: Web UI からワンクリックでプログラム設定・スケジューラ設定を双方向同期。
 
 ---
 
-## 3. マルチファイル & プロセス分離ストレージ (Multi-File & Isolated Storage)
-1つのプロセスに複数のプログラムコードやデータファイルを取り込むことができます。
-
-- **データ構造 (\`Program\` & \`CodeFile\`)**:
-  - \`files: CodeFile[]\` (\`id\`, \`filename\`, \`content\`, \`isEntry\`)
-  - \`isEntry === true\` のファイルが実行時のメインエントリーポイントとなります。
-- **プロセス分離ディレクトリ**:
-  - プロセス実行時、\`/data/processes/<programId>/\` 配下に全構成ファイルが書き出されます。
-  - プロセス削除時には該当ディレクトリ内のファイルも安全に消去されます。
-- **外部ファイル読み込み (File Reader / Upload)**:
-  - ローカルPC上のコードや設定ファイル (JS, Python, Shell, JSON, CSV, TXT等) をダイレクトにプロセス内へ読み込み可能。
-- **ファイル名の動的変更 (Filename Editor)**:
-  - UI上で各ファイルのファイル名を自由に書き換え可能。
-- **コード折りたたみ表示 (Collapsible Code UI)**:
-  - エディタおよびカードUI上でアコーディオン表示 (折りたたみ/展開) が可能で、長大なコードや複数ファイルがあっても見やすいレイアウトを実現。
+## 3. タイムアウト制限解除仕様 (No-Timeout Engine)
+- **無制限実行**: 従来の自動強制終了 (30秒〜のタイマー) を全廃。スクレイピングや長時間バッチ処理、リアルタイム監視処理に対応。
+- **手動停止保証**: ユーザーによる「停止」ボタン押下、または \`POST /api/programs/:id/stop\` リクエストのみで安全にプロセスを終了可能。
 
 ---
 
-## 4. サンドボックス実行エンジン (Sandbox Execution Engine)
-- **非同期プロセス管理**: \`child_process.spawn\` を使用し、プロセス分離ディレクトリ (\`cwd: /data/processes/<programId>\`) を作業ディレクトリとして実行。
-- **対応言語と実行環境**:
-  - **Node.js**: \`node <entry_file>\`
-  - **Python**: \`python3 <entry_file>\`
-  - **Bash**: \`bash <entry_file>\`
-  - **PHP**: \`php <entry_file>\`
-  - **Ruby**: \`ruby <entry_file>\`
-- **ログ収集**: \`stdout\` / \`stderr\` をリアルタイムキャプチャし、最大500行まで保持。
+## 4. プロセスディレクトリ検査 & ファイル構造 (Process Directory Inspector)
+- **ディレクトリ構成**: \`/data/processes/<programId>/\`
+- **リアルタイム走査 API**: \`GET /api/programs/:id/directory\`
+  - プロセス実行時・終了時に生成されたファイルや生成データを再帰的に走査。
+  - ファイル名、相対パス、ファイルサイズ (B/KB/MB)、更新日時、およびインラインプレビューテキストを取得。
+- **UIモーダル**: 「フォルダ内」ボタンからプロセス別ディレクトリ構成と生成ファイルをリアルタイム確認可能。
 
 ---
 
-## 5. 時間指定スケジューラー (Scheduler System)
-- **精度**: 毎分00秒のタイマーチェック (\`setInterval\` 10秒精度のポーリング)。
-- **重複実行防止**: 指定時刻にすでに該当プログラムが \`RUNNING\` 状態である場合、多重実行を回避しログにスキップ記録。
+## 5. メモリ高消費の原因分析 & 最適化設計 (Memory Usage & Optimization)
+- **原因 1 (大容量ログバッファ)**: 子プロセスの \`STDOUT\`/\`STDERR\` からの連続出力が無限配列に積み上がりV8 Heapを過大消費。
+- **原因 2 (長文字列バッファの留保)**: 長大なテキスト出力がガベージコレクション(GC)の追従速度を超過。
+- **原因 3 (V8ヒープ事前割り当て)**: Node.js V8エンジンが高速化目的で高メモリ(RSS)を確保。
+- **最適化対策**:
+  1. **ログ文字列切り詰め**: 1行あたり最大1,500文字で切詰、Heap増大を防止。
+  2. **グローバルログ上限設定**: 配列要素数を200件に絞り、V8メモリリークを排除。
+  3. **ストリームクリーンアップ**: 子プロセス終了時に \`removeAllListeners()\` でストリーム参照を全開放。
 
 ---
 
-## 6. Railway API & 環境変数連携
-- **Railway API 統合**: Railway トークンとプロジェクトIDを設定することで、外部から環境変数の取得・更新が可能。
-- **プロセス環境変数への自動反映**: プロセス毎に設定された環境変数およびグローバル環境変数は、実行時にプロセスへ注入。
+## 6. 二重稼働防止ガード & UI制御仕様 (Duplicate Run Prevention)
+- **UIボタン操作不可**: 処理実行中 (\`isProcessing === true\`)、またはプログラム状態が \`RUNNING\` の場合、「実行」「編集」「削除」「新規作成」ボタンを即座に操作不可 (\`disabled\`) にロック。
+- **サーバーAPIガード**: 既に実行中のプロセスに対して \`POST /api/programs/:id/run\` が送信された場合、HTTP \`409 Conflict\` エラーを返し重複起動を拒否。
+- **スケジューラスキップ**: 時間指定スケジュール実行時、対象が \`RUNNING\` であればログに \`[SCHEDULE SKIPPED]\` と記録してスキップ。
 
 ---
 
 ## 7. REST API エンドポイント一覧 (API Endpoints)
-- \`GET /api/system/status\` : メモリ・Uptime・接続状況取得
+- \`GET /api/system/status\` : メモリ(HeapUsed, HeapTotal, RSS)・Uptime・CPU取得
 - \`GET /api/state\` : プログラム・スケジュール・ログデータ取得
 - \`POST /api/state/sync\` : クライアントからの状態一括同期
-- \`POST /api/programs\` : プログラム (複数ファイル含む) 作成・編集
+- \`POST /api/programs\` : プログラム作成・編集
 - \`DELETE /api/programs/:id\` : プログラム & プロセスディレクトリ削除
-- \`POST /api/programs/:id/run\` : プログラム手動実行
+- \`GET /api/programs/:id/directory\` : プロセス分離ディレクトリ内ファイル一覧＆プレビュー取得
+- \`POST /api/programs/:id/run\` : プログラム実行 (二重稼働保護 409 Conflict)
 - \`POST /api/programs/:id/stop\` : 実行中プログラム強制停止
-- \`POST /api/schedules\` : スケジュール設定更新
-- \`POST /api/railway/variables\` : Railway環境変数更新
 `;
 
     const blob = new Blob([markdownContent], { type: 'text/markdown' });
@@ -131,93 +119,91 @@ Railway はコンテナの再起動や再デプロイ時にエフェメラル(�
 
       {/* Grid Features */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* 1. Multi-File & Isolated Storage */}
+        {/* 1. Timeout Removal Engine */}
+        <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-6 space-y-4">
+          <div className="flex items-center space-x-3">
+            <div className="p-2.5 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+              <Clock className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-slate-100">1. タイムアウト制限解除仕様 (無制限実行)</h3>
+              <p className="text-xs text-slate-400 font-mono">No Execution Timeout</p>
+            </div>
+          </div>
+          <div className="text-xs text-slate-300 space-y-2 leading-relaxed">
+            <p>
+              従来のタイマー判定による強制終了処理を全廃し、無制限での連続実行が可能になりました。
+            </p>
+            <ul className="list-disc list-inside space-y-1 text-slate-400">
+              <li>長時間バッチ処理・リアルタイムデータ監視・スクレイピングに対応。</li>
+              <li>「停止」ボタン押下または手動停止API要求時のみ安全にkillシグナルを発行。</li>
+            </ul>
+          </div>
+        </div>
+
+        {/* 2. Process Directory Inspector */}
         <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-6 space-y-4">
           <div className="flex items-center space-x-3">
             <div className="p-2.5 rounded-lg bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
               <Folder className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-base font-bold text-slate-100">1. マルチファイル & プロセス分離ストレージ</h3>
-              <p className="text-xs text-slate-400">1プロセス内での複数コード/データ管理</p>
+              <h3 className="text-base font-bold text-slate-100">2. プロセスディレクトリ内表示 & 検査</h3>
+              <p className="text-xs text-slate-400 font-mono">/data/processes/&lt;programId&gt;/</p>
             </div>
           </div>
           <div className="text-xs text-slate-300 space-y-2 leading-relaxed">
             <p>
-              各プロセスは独立した専用ディレクトリ <code className="bg-slate-800 text-slate-200 px-1 py-0.5 rounded font-mono">/data/processes/&lt;programId&gt;/</code> 内で動きます。
+              プロセスごとに隔離生成されるディレクトリ内の全構成ファイルおよび生成データをリアルタイム確認。
             </p>
             <ul className="list-disc list-inside space-y-1 text-slate-400">
-              <li>構成ファイル群: <code className="bg-slate-800 text-slate-200 px-1 py-0.5 rounded font-mono">files: CodeFile[]</code> で複数保持。</li>
-              <li>エントリ指定: メインで起動するファイルをUIで星マーク（isEntry）指定。</li>
-              <li>ファイル読込: ローカルPCからテキスト・コード類をダイレクトにインポート。</li>
-              <li>ファイル名変更: 任意のタイミングでリネーム可能。</li>
+              <li>API <code className="bg-slate-800 text-slate-200 px-1 py-0.5 rounded font-mono">GET /api/programs/:id/directory</code> でファイル構造を再帰走査。</li>
+              <li>「フォルダ内」モーダルでファイルサイズ・更新日時・テキスト内容プレビューを表示。</li>
             </ul>
           </div>
         </div>
 
-        {/* 2. Collapsible & UI Optimizations */}
-        <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-6 space-y-4">
-          <div className="flex items-center space-x-3">
-            <div className="p-2.5 rounded-lg bg-purple-500/10 text-purple-400 border border-purple-500/20">
-              <ChevronDown className="w-5 h-5" />
-            </div>
-            <div>
-              <h3 className="text-base font-bold text-slate-100">2. コード折りたたみ & 視認性最適化</h3>
-              <p className="text-xs text-slate-400">アコーディオンUIとマルチファイル切替</p>
-            </div>
-          </div>
-          <div className="text-xs text-slate-300 space-y-2 leading-relaxed">
-            <p>
-              大量のコードや複数のファイルをスッキリ管理するための視認性向上機能を搭載。
-            </p>
-            <ul className="list-disc list-inside space-y-1 text-slate-400">
-              <li>コード折りたたみ: エディタおよびカードでソースコードを1タップ折りたたみ/展開。</li>
-              <li>タブ切替: 複数ファイルをスムーズに切り替え可能。</li>
-            </ul>
-          </div>
-        </div>
-
-        {/* 3. Persistence & Sync */}
-        <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-6 space-y-4">
-          <div className="flex items-center space-x-3">
-            <div className="p-2.5 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-              <RefreshCw className="w-5 h-5" />
-            </div>
-            <div>
-              <h3 className="text-base font-bold text-slate-100">3. 持続化 & クライアント同期</h3>
-              <p className="text-xs text-slate-400">Railway コンテナ再起動対策</p>
-            </div>
-          </div>
-          <div className="text-xs text-slate-300 space-y-2 leading-relaxed">
-            <p>
-              Railway のコンテナ初期化問題（Ephemeral Storage）に対応するハイブリッド同期。
-            </p>
-            <ul className="list-disc list-inside space-y-1 text-slate-400">
-              <li>サーバー保存先: <code className="bg-slate-800 text-slate-200 px-1 py-0.5 rounded font-mono">/data/server_state.json</code></li>
-              <li>クライアントバックアップ: ブラウザ <code className="bg-slate-800 text-slate-200 px-1 py-0.5 rounded font-mono">localStorage</code></li>
-              <li>手動・自動同期: ボタン1つで双方向同期・バックアップ適用。</li>
-            </ul>
-          </div>
-        </div>
-
-        {/* 4. Sandbox & Scheduler */}
+        {/* 3. Memory Optimization */}
         <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-6 space-y-4">
           <div className="flex items-center space-x-3">
             <div className="p-2.5 rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/20">
               <Cpu className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-base font-bold text-slate-100">4. 実行エンジン & スケジューラー</h3>
-              <p className="text-xs text-slate-400">非同期実行と時間指定制御</p>
+              <h3 className="text-base font-bold text-slate-100">3. メモリ高消費の原因分析 & 最適化設計</h3>
+              <p className="text-xs text-slate-400 font-mono">V8 Heap & Array Memory Caps</p>
             </div>
           </div>
           <div className="text-xs text-slate-300 space-y-2 leading-relaxed">
             <p>
-              Node.js, Python, Bash, PHP, Ruby を分離環境で実行。
+              子プロセスのSTDOUT/STDERR大量出力によるV8 Heap肥大化を根本解決。
             </p>
             <ul className="list-disc list-inside space-y-1 text-slate-400">
-              <li>非ブロッキング: <code className="bg-slate-800 text-slate-200 px-1 py-0.5 rounded font-mono">child_process.spawn</code> で起動。</li>
-              <li>時間指定実行: HH:MM 定刻に自動実行。既に実行中なら重複回避スキップ。</li>
+              <li>ログ出力文字列の自動切り詰め (1行あたり最大1,500文字)。</li>
+              <li>グローバルログ保持数の上限厳格化 (最大200件に制限)。</li>
+              <li>子プロセス終了時のイベントリスナー参照完全解放。</li>
+            </ul>
+          </div>
+        </div>
+
+        {/* 4. Double Execution Prevention */}
+        <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-6 space-y-4">
+          <div className="flex items-center space-x-3">
+            <div className="p-2.5 rounded-lg bg-purple-500/10 text-purple-400 border border-purple-500/20">
+              <RefreshCw className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-slate-100">4. 二重稼働防止ガード & UI制御仕様</h3>
+              <p className="text-xs text-slate-400 font-mono">UI Locking & HTTP 409 Conflict</p>
+            </div>
+          </div>
+          <div className="text-xs text-slate-300 space-y-2 leading-relaxed">
+            <p>
+              同時実行や二重ボタン連打によるプロセス重複アクティビティを完全にガード。
+            </p>
+            <ul className="list-disc list-inside space-y-1 text-slate-400">
+              <li>処理中 (<code className="bg-slate-800 text-slate-200 px-1 py-0.5 rounded font-mono">isProcessing</code>) または実行中はボタンを無効化 (<code className="bg-slate-800 text-slate-200 px-1 py-0.5 rounded font-mono">disabled</code>)。</li>
+              <li>重複要求に対しサーバーは HTTP <code className="bg-slate-800 text-slate-200 px-1 py-0.5 rounded font-mono">409 Conflict</code> を返却。</li>
             </ul>
           </div>
         </div>

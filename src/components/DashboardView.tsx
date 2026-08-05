@@ -147,22 +147,65 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         {/* Metric 4: System Resource Usage */}
         <div className="bg-slate-900/80 rounded-xl p-5 border border-slate-800 space-y-3">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">リソース使用量</span>
+            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">メモリ使用量 (V8)</span>
             <div className="w-8 h-8 rounded-lg bg-amber-500/10 text-amber-400 flex items-center justify-center border border-amber-500/20">
               <Cpu className="w-4 h-4" />
             </div>
           </div>
           <div>
             <div className="text-2xl font-bold text-slate-100 flex items-baseline space-x-2">
-              <span>{systemStatus?.memoryUsageMb || 0} MB</span>
-              <span className="text-xs font-normal text-slate-400">Heap Memory</span>
+              <span>{systemStatus?.heapUsedMb || systemStatus?.memoryUsageMb || 0} MB</span>
+              <span className="text-xs font-normal text-slate-400">Heap Used</span>
+            </div>
+            <div className="flex items-center justify-between text-[11px] text-slate-400 mt-1 font-mono">
+              <span>Total: {systemStatus?.heapTotalMb || 0} MB</span>
+              <span>RSS: {systemStatus?.rssMb || 0} MB</span>
             </div>
             <div className="w-full bg-slate-800 rounded-full h-1.5 mt-2 overflow-hidden">
               <div 
                 className="bg-indigo-500 h-full rounded-full transition-all duration-500" 
-                style={{ width: `${Math.min(100, Math.max(10, ((systemStatus?.memoryUsageMb || 0) / 256) * 100))}%` }}
+                style={{ width: `${Math.min(100, Math.max(10, (((systemStatus?.heapUsedMb || systemStatus?.memoryUsageMb || 0)) / 256) * 100))}%` }}
               />
             </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Memory Usage Analysis & Mitigation Report Card */}
+      <div className="bg-slate-900/80 rounded-2xl border border-slate-800 p-5 space-y-3 shadow-lg">
+        <div className="flex items-center space-x-3 pb-2 border-b border-slate-800">
+          <div className="p-2 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20">
+            <HardDrive className="w-5 h-5" />
+          </div>
+          <div>
+            <h4 className="font-bold text-slate-100 text-sm">メモリ使用量の原因分析 & 最適化レポート</h4>
+            <p className="text-xs text-slate-400">Node.jsプロセス管理システムにおけるメモリ肥大化の主な要因と本リリースで実施した最適化対策</p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs pt-1">
+          <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-2">
+            <span className="font-bold text-amber-300 flex items-center space-x-1.5">
+              <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+              <span>メモリ高消費の主な要因 (原因)</span>
+            </span>
+            <ul className="space-y-1.5 text-slate-300 list-disc list-inside text-[11px] leading-relaxed">
+              <li><strong className="text-slate-100">大量ログ出力の配列保持:</strong> プロセスが標準出力(STDOUT/STDERR)へ大量ログを出力した際、メモリ上の配列に溜め込まれV8 Heapを消費。</li>
+              <li><strong className="text-slate-100">子プロセスの長文字列バッファ:</strong> 巨大なログ文字列がオブジェクトとして連続確保されGC(ガベージコレクション)が追いつかない現象。</li>
+              <li><strong className="text-slate-100">Node.js V8ヒープ事前確保:</strong> V8エンジンが高速化のためにプロセス起動時にRSS (Resident Set Size)を事前に大きく割り当てる仕様。</li>
+            </ul>
+          </div>
+
+          <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-2">
+            <span className="font-bold text-emerald-300 flex items-center space-x-1.5">
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+              <span>実施済みのメモリ最適化対策</span>
+            </span>
+            <ul className="space-y-1.5 text-slate-300 list-disc list-inside text-[11px] leading-relaxed">
+              <li><strong className="text-slate-100">ログ出力文字列切り詰める (最大1,500文字):</strong> 超過ログは自動切詰めでHeap暴走を阻止。</li>
+              <li><strong className="text-slate-100">グローバルログ上限の厳格化 (200件):</strong> 配列最大要素数を絞りメモリリークを抑止。</li>
+              <li><strong className="text-slate-100">ストリームリスナーの明示的解放:</strong> 子プロセス終了時にSTDOUT/STDERRリスナーをクリーンアップ。</li>
+            </ul>
           </div>
         </div>
       </div>

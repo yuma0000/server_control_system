@@ -23,6 +23,7 @@ export default function App() {
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<string>('');
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
+  const [isProcessing, setIsProcessing] = useState<boolean>(false);
 
   // Editor Modal state
   const [isEditorModalOpen, setIsEditorModalOpen] = useState<boolean>(false);
@@ -125,37 +126,47 @@ export default function App() {
 
   // Actions
   const handleRunProgram = async (id: string) => {
+    setIsProcessing(true);
     try {
       await fetch(`/api/programs/${id}/run`, { method: 'POST' });
-      fetchStateFromBackend();
+      await fetchStateFromBackend();
     } catch (err) {
       console.error('Error running program:', err);
+    } finally {
+      setIsProcessing(false);
     }
   };
 
   const handleStopProgram = async (id: string) => {
+    setIsProcessing(true);
     try {
       await fetch(`/api/programs/${id}/stop`, { method: 'POST' });
-      fetchStateFromBackend();
+      await fetchStateFromBackend();
     } catch (err) {
       console.error('Error stopping program:', err);
+    } finally {
+      setIsProcessing(false);
     }
   };
 
   const handleSaveProgram = async (prog: Program) => {
+    setIsProcessing(true);
     try {
       await fetch('/api/programs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(prog)
       });
-      fetchStateFromBackend();
+      await fetchStateFromBackend();
     } catch (err) {
       console.error('Error saving program:', err);
+    } finally {
+      setIsProcessing(false);
     }
   };
 
   const handleDeleteProgram = async (id: string) => {
+    setIsProcessing(true);
     try {
       // 1. Optimistic state update in React UI
       const nextPrograms = programs.filter(p => p.id !== id);
@@ -176,6 +187,8 @@ export default function App() {
     } catch (err) {
       console.error('Error deleting program:', err);
       fetchStateFromBackend();
+    } finally {
+      setIsProcessing(false);
     }
   };
 
@@ -339,6 +352,7 @@ export default function App() {
               onStopProgram={handleStopProgram}
               onDeleteProgram={handleDeleteProgram}
               onOpenEditModal={handleOpenEditModal}
+              isProcessing={isProcessing}
             />
           )}
 

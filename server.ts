@@ -139,27 +139,91 @@ function loadStateFromDisk() {
 }
 
 function addLog(programId: string, programName: string, level: LogEntry['level'], message: string, details?: string) {
+  // Truncate long messages to prevent V8 heap bloat & high memory usage
+  const truncatedMsg = message.length > 1500 ? message.substring(0, 1500) + '... (Output truncated for memory optimization)' : message;
   const newLog: LogEntry = {
     id: `log-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
     programId,
     programName,
     timestamp: new Date().toISOString(),
     level,
-    message,
+    message: truncatedMsg,
     details
   };
   logs.unshift(newLog);
-  if (logs.length > 1000) {
-    logs = logs.slice(0, 1000);
+  // Cap global logs to 200 to optimize memory usage
+  if (logs.length > 200) {
+    logs = logs.slice(0, 200);
   }
 }
 
-// Sandbox execution engine for registered programs
+// Function to read all files in isolated process directory
+function getProgramDirectoryFiles(programId: string) {
+  const procDir = path.join(PROCESSES_DIR, programId);
+  if (!fs.existsSync(procDir)) {
+    return [];
+  }
+
+  const result: Array<{
+    filename: string;
+    relativePath: string;
+    sizeBytes: number;
+    updatedAt: string;
+    isEntry?: boolean;
+    content?: string;
+    isDirectory?: boolean;
+  }> = [];
+
+  const readDirRecursive = (currentDir: string, baseDir: string) => {
+    try {
+      const items = fs.readdirSync(currentDir);
+      for (const item of items) {
+        const fullPath = path.join(currentDir, item);
+        const relPath = path.relative(baseDir, fullPath);
+        const stats = fs.statSync(fullPath);
+
+        if (stats.isDirectory()) {
+          result.push({
+            filename: item,
+            relativePath: relPath,
+            sizeBytes: 0,
+            updatedAt: stats.mtime.toISOString(),
+            isDirectory: true
+          });
+          readDirRecursive(fullPath, baseDir);
+        } else if (stats.isFile()) {
+          let content = '';
+          if (stats.size < 200000) { // Limit inline preview to 200KB files
+            try {
+              content = fs.readFileSync(fullPath, 'utf-8');
+            } catch (_) {}
+          } else {
+            content = '(Large file - content preview hidden)';
+          }
+
+          result.push({
+            filename: item,
+            relativePath: relPath,
+            sizeBytes: stats.size,
+            updatedAt: stats.mtime.toISOString(),
+            content,
+            isDirectory: false
+          });
+        }
+      }
+    } catch (_) {}
+  };
+
+  readDirRecursive(procDir, procDir);
+  return result;
+}
+
+// Sandbox execution engine for registered programs (Timeout Removed for Unlimited Runtime)
 async function runProgram(programId: string, triggerSource: 'manual' | 'scheduled' = 'manual'): Promise<boolean> {
   const prog = programs.find(p => p.id === programId);
   if (!prog) return false;
 
-  // Check if already running
+  // Prevent duplicate runs
   if (prog.status === 'RUNNING' || activeProcesses.has(programId)) {
     if (triggerSource === 'scheduled') {
       const nowStr = new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', hour12: false });
@@ -209,7 +273,7 @@ async function runProgram(programId: string, triggerSource: 'manual' | 'schedule
   // Determine entry file
   const entryFile = prog.files.find(f => f.isEntry) || prog.files[0] || { filename: getDefaultFilename(prog.language), content: '' };
   
-  addLog(prog.id, prog.name, 'INFO', `Starting program execution in isolated dir (${procDir}). Entry: ${entryFile.filename} (${prog.files.length} file(s)) - Source: ${triggerSource}`);
+  addLog(prog.id, prog.name, 'INFO', `Starting program execution in isolated dir (${procDir}). Entry: ${entryFile.filename} (${prog.files.length} file(s)) - Timeout: Disabled (Unlimited runtime)`);
 
   const startTime = Date.now();
 
@@ -261,18 +325,8 @@ async function runProgram(programId: string, triggerSource: 'manual' | 'schedule
 
     prog.runningPid = childProcess.pid;
 
-    // Timeout safety timer
-    const timeoutMs = (prog.timeoutSec || 30) * 1000;
-    const timeoutTimer = setTimeout(() => {
-      if (activeProcesses.has(programId)) {
-        addLog(prog.id, prog.name, 'WARN', `Program timed out after ${prog.timeoutSec} seconds. Killing process...`);
-        try {
-          childProcess.kill('SIGTERM');
-        } catch (_) {}
-      }
-    }, timeoutMs);
-
-    activeProcesses.set(programId, { process: childProcess, startTime, timeoutTimer });
+    // Timeout is completely disabled to support long-running processes without truncation
+    activeProcesses.set(programId, { process: childProcess, startTime });
 
     childProcess.stdout?.on('data', (data) => {
       const text = data.toString().trim();
@@ -293,7 +347,12 @@ async function runProgram(programId: string, triggerSource: 'manual' | 'schedule
     });
 
     childProcess.on('close', (code) => {
-      clearTimeout(timeoutTimer);
+      // Memory cleanup for streams
+      try {
+        childProcess.stdout?.removeAllListeners();
+        childProcess.stderr?.removeAllListeners();
+      } catch (_) {}
+
       activeProcesses.delete(programId);
       
       const durationMs = Date.now() - startTime;
@@ -391,6 +450,9 @@ app.get(['/api/status', '/api/system/status'], (req, res) => {
     connected: true,
     serverUptimeSec: Math.floor(uptime),
     memoryUsageMb: Math.round(memory.heapUsed / 1024 / 1024),
+    heapUsedMb: Math.round(memory.heapUsed / 1024 / 1024),
+    heapTotalMb: Math.round(memory.heapTotal / 1024 / 1024),
+    rssMb: Math.round(memory.rss / 1024 / 1024),
     cpuPercent: Math.min(100, Math.round(Math.random() * 5 + 2)), // simulated CPU load %
     runningProgramsCount: activeProcesses.size,
     totalProgramsCount: programs.length,
@@ -518,13 +580,39 @@ app.delete('/api/programs/:id', (req, res) => {
   res.json({ success: true, programs });
 });
 
-// Run Program Manual API
+// Program Isolated Directory Inspector Endpoint
+app.get('/api/programs/:id/directory', (req, res) => {
+  const { id } = req.params;
+  const prog = programs.find(p => p.id === id);
+  if (!prog) {
+    return res.status(404).json({ error: 'Program not found' });
+  }
+
+  const files = getProgramDirectoryFiles(id);
+  res.json({
+    programId: id,
+    programName: prog.name,
+    processDir: path.join(PROCESSES_DIR, id),
+    filesCount: files.length,
+    files
+  });
+});
+
+// Run Program Manual API (Guarded against Duplicate Execution)
 app.post('/api/programs/:id/run', async (req, res) => {
   const { id } = req.params;
   const prog = programs.find(p => p.id === id);
 
   if (!prog) {
     return res.status(404).json({ error: 'Program not found' });
+  }
+
+  // Prevent duplicate execution
+  if (prog.status === 'RUNNING' || activeProcesses.has(id)) {
+    return res.status(409).json({
+      error: `プログラム「${prog.name}」は既に実行中です。二重稼働防止のため追加の実行要求を拒否しました。`,
+      code: 'ALREADY_RUNNING'
+    });
   }
 
   // Trigger non-blocking run
