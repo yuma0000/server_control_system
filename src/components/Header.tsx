@@ -60,7 +60,7 @@ export const Header: React.FC<HeaderProps> = ({
           <span>{timeStr || '00:00:00'} JST</span>
         </div>
 
-        {/* Sync Status Badge */}
+        {/* Sync Status Badge & Version */}
         <div className="flex items-center space-x-1.5 bg-slate-800/80 px-2.5 sm:px-3 py-1.5 rounded-lg border border-slate-700/60 text-xs">
           {systemStatus?.connected ? (
             <>
@@ -73,6 +73,9 @@ export const Header: React.FC<HeaderProps> = ({
               <span className="text-amber-400 font-medium">再接続中...</span>
             </>
           )}
+          <span className="ml-1 text-[10px] font-mono px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-bold">
+            v2.4.0
+          </span>
         </div>
 
         {/* Manual Sync / Refresh Button */}

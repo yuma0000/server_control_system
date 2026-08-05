@@ -133,9 +133,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
             有効
           </span>
         </div>
-        <p className="text-[10px] text-slate-400 leading-relaxed">
-          Railway起動時にクライアント設定を自動ロードし同期します。
-        </p>
+        <div className="pt-1 flex items-center justify-between text-[10px] text-slate-400 font-mono">
+          <span>Portal Version</span>
+          <span className="text-indigo-400 font-bold bg-indigo-500/10 px-1.5 py-0.5 rounded border border-indigo-500/20">v2.4.0</span>
+        </div>
       </div>
     </div>
   );
