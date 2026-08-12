@@ -36,9 +36,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'programs', label: 'プログラム管理', icon: Code2, badge: runningCount > 0 ? `${runningCount} 実行中` : undefined },
     { id: 'scheduler', label: '時間指定スケジュール', icon: Clock },
     { id: 'logs', label: '実行ログ / 問題確認', icon: Terminal },
-    { id: 'sync', label: '同期 & バックアップ', icon: RefreshCw },
-    { id: 'railway', label: 'Railway API / 環境変数', icon: Sliders },
-    { id: 'spec', label: '技術仕様書 (Docs)', icon: FileText },
+    { id: 'sync', label: '同期 & 分離設定', icon: RefreshCw },
+    { id: 'railway', label: '環境変数 / API設定', icon: Sliders },
+    { id: 'spec', label: '分離・デプロイ仕様書', icon: FileText },
   ];
 
   const content = (
@@ -52,10 +52,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </div>
             <div>
               <h1 className="font-bold text-slate-100 text-base tracking-tight leading-none">
-                Railway Server
+                Node Server
               </h1>
               <span className="text-[11px] text-indigo-400 font-medium tracking-wide uppercase">
-                Management Portal
+                Control Portal
               </span>
             </div>
           </div>
@@ -135,7 +135,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
         <div className="pt-1 flex items-center justify-between text-[10px] text-slate-400 font-mono">
           <span>Portal Version</span>
-          <span className="text-indigo-400 font-bold bg-indigo-500/10 px-1.5 py-0.5 rounded border border-indigo-500/20">v2.4.0</span>
+          <span className="text-indigo-400 font-bold bg-indigo-500/10 px-1.5 py-0.5 rounded border border-indigo-500/20">v3.0.0</span>
         </div>
       </div>
     </div>

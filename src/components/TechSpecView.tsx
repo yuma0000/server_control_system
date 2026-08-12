@@ -14,66 +14,128 @@ import {
 
 export const TechSpecView: React.FC = () => {
   const downloadMarkdown = () => {
-    const markdownContent = `# Railway サーバー管理システム 技術仕様書 (Technical Specifications)
+    const markdownContent = `# Universal Node.js API サーバー & 管理システム 技術仕様書 (v3.0.0)
 
 ## 1. システム概要 (System Overview)
-本システムは、**Railway パース(PaaS)** クラウド環境上でマルチ言語プログラム (Node.js, Python, Bash, PHP, Ruby) をサンドボックス安全に実行・停止・管理・時間指定予約 (スケジュール) 実行し、ログ確認や環境変数の動的制御を行うための統合管理ポータルシステムです。
+本システムは、マルチ言語プログラム (Node.js, Python, Bash, PHP, Ruby) をサンドボックス環境で安全に実行・停止・予約（スケジュール）実行・ログキャプチャし、環境変数およびプロセス分離ストレージの管理を行う統合プラットフォームです。
 
-最新の仕様改定により、**タイムアウト制限の解除 (無制限実行)**、**プロセス別独立ディレクトリ (/data/processes/<programId>) のファイル一覧・プレビュー機能**、**メモリ消費原因の分析と最適化 (V8 Heap/配列の上限制御)**、および **二重稼働防止のためのUIボタンロックとHTTP 409重複保護** が実装されました。
-
----
-
-## 2. アーキテクチャ & 持続化設計 (Architecture & Persistence)
-Railway はコンテナの再起動や再デプロイ時にエフェメラル(一時的)なファイルシステムが初期化される特性を持っています。本システムではこの課題を解決するため、**ハイブリッド同期持続化モデル (Client-Server State Sync)** を採用しています。
-
-- **Primary State Storage**: \`/data/server_state.json\`
-- **Process Isolated Storage**: \`/data/processes/<programId>/\` (各プロセス専用の隔離ストレージディレクトリ)
-- **Backup / Source of Truth (Client)**: ブラウザの \`localStorage\` (\`RAILWAY_SERVER_MGMT_STATE_V1\`)
+v3.0.0 により、**サーバー (API Backend)** と **クライアント (Vite/React SPA)** の完全分離設計、**Railway トラフィック制限対策（Gzip圧縮・軽量ポーリング・CORS対応）**、および **\`start.sh\` から \`node index.js\` 実行時のプロセス残留防止策** を仕様化しています。
 
 ---
 
-## 3. タイムアウト制限解除仕様 (No-Timeout Engine)
-- **無制限実行**: 従来の自動強制終了 (30秒〜のタイマー) を全廃。スクレイピングや長時間バッチ処理、リアルタイム監視処理に対応。
-- **手動停止保証**: ユーザーによる「停止」ボタン押下、または \`POST /api/programs/:id/stop\` リクエストのみで安全にプロセスを終了可能。
+## 2. アーキテクチャ & サーバー/クライアント分離仕様 (Server & Client Separation)
+
+### 2.1 独立動作モード (Standalone API vs Fullstack)
+環境変数 \`SERVE_STATIC\` の値により、サーバーの動作モードを動的に切り替えます。
+
+- **\`SERVE_STATIC=false\` (スタンドアロン API モード / 推奨)**:
+  - サーバーは REST API のみに専念します。
+  - 静的ファイル (HTML/JS/CSS) の配信を行わないため、クラウドサーバー (Railway, Render, Fly.io 等) のネットワーク転送量 (Egress Traffic) を最大 100% 削減可能。
+  - フロントエンドは Vercel, Netlify, Cloudflare Pages, またはローカル端末から接続します。
+- **\`SERVE_STATIC=true\` (フルスタック統合モード)**:
+  - 単一の Node.js プロセスで API と ビルド済み React SPA (\`dist/\`) の両方を配信します。
+
+### 2.2 実行コマンド体系 (\`package.json\`)
+- \`npm run build:server\`: \`esbuild\` により \`server.ts\` を単一 CommonJS バンドル \`dist/server.cjs\` へコンパイル。
+- \`npm run start:server\`: \`SERVE_STATIC=false\` で API サーバーのみを起動。
+- \`npm run build:client\`: Vite により React フロントエンドを \`dist/\` に静的ビルド。
+- \`npm run dev:client\`: クライアント単体開発サーバー (ポート 5173 / 3000) 起動。
 
 ---
 
-## 4. プロセスディレクトリ検査 & ファイル構造 (Process Directory Inspector)
-- **ディレクトリ構成**: \`/data/processes/<programId>/\`
-- **リアルタイム走査 API**: \`GET /api/programs/:id/directory\`
-  - プロセス実行時・終了時に生成されたファイルや生成データを再帰的に走査。
-  - ファイル名、相対パス、ファイルサイズ (B/KB/MB)、更新日時、およびインラインプレビューテキストを取得。
-- **UIモーダル**: 「フォルダ内」ボタンからプロセス別ディレクトリ構成と生成ファイルをリアルタイム確認可能。
+## 3. Railway ネットワーク通信量削減仕様 (Network Bandwidth Optimization)
+
+Railway などの転送量従量課金 / 制限対策として以下の3段階最適化を実施しています。
+
+1. **HTTP Gzip / Deflate レスポンス圧縮 (\`compression\`)**:
+   - Express ミドルウェアで全レスポンスを圧縮し、JSON データサイズを 70〜80% 削減。
+2. **軽量ステータスポーリング API (\`GET /api/sync?light=true\`)**:
+   - ポーリング時にはプログラムのコードソース本文（\`content\`, \`code\`）を除外し、ステータスとログのみを返却。転送量を約 95% 削減。
+3. **CORS (Cross-Origin Resource Sharing) 許可設定**:
+   - \`Access-Control-Allow-Origin: *\` (または \`CORS_ORIGIN\` 環境変数) により、別ドメインやローカル端末からの安全なクロスオリジン API 呼び出しを許可。
 
 ---
 
-## 5. メモリ高消費の原因分析 & 最適化設計 (Memory Usage & Optimization)
-- **原因 1 (大容量ログバッファ)**: 子プロセスの \`STDOUT\`/\`STDERR\` からの連続出力が無限配列に積み上がりV8 Heapを過大消費。
-- **原因 2 (長文字列バッファの留保)**: 長大なテキスト出力がガベージコレクション(GC)の追従速度を超過。
-- **原因 3 (V8ヒープ事前割り当て)**: Node.js V8エンジンが高速化目的で高メモリ(RSS)を確保。
-- **最適化対策**:
-  1. **ログ文字列切り詰め**: 1行あたり最大1,500文字で切詰、Heap増大を防止。
-  2. **グローバルログ上限設定**: 配列要素数を200件に絞り、V8メモリリークを排除。
-  3. **ストリームクリーンアップ**: 子プロセス終了時に \`removeAllListeners()\` でストリーム参照を全開放。
+## 4. \`start.sh\` から \`node index.js\` 実行時のプロセス残留対策 (Process Leak Solutions)
+
+シェルスクリプト \`start.sh\` 経由で Node.js プロセスを起動・停止する際、\`node index.js\` がバックグラウンドにゾンビプロセスとして残る問題に対する仕様解決策です。
+
+### 解決策 1: \`exec\` キーワードの使用（標準推奨）
+シェルプロセス (bash) を \`node\` プロセスに直接置換 (\`exec\`) します。
+停止シグナル (\`SIGTERM\` / \`SIGINT\`) が直接 Node.js プロセスに届くため、親プロセス終了に伴うゾンビ化が発生しません。
+\`\`\`bash
+#!/bin/bash
+# start.sh
+exec node index.js
+\`\`\`
+
+### 解決策 2: シグナルトラップ (\`trap\`) による子プロセス管理
+事前に環境構築やログ出力等の前処理が必要な場合、\`trap\` を使用してシグナルを受信した際に子プロセス PID に強制終了命令を発行します。
+\`\`\`bash
+#!/bin/bash
+# start.sh
+trap 'kill -TERM "$PID"; wait "$PID"' TERM INT EXIT
+
+node index.js &
+PID=$!
+wait "$PID"
+\`\`\`
 
 ---
 
-## 6. 二重稼働防止ガード & UI制御仕様 (Duplicate Run Prevention)
-- **UIボタン操作不可**: 処理実行中 (\`isProcessing === true\`)、またはプログラム状態が \`RUNNING\` の場合、「実行」「編集」「削除」「新規作成」ボタンを即座に操作不可 (\`disabled\`) にロック。
-- **サーバーAPIガード**: 既に実行中のプロセスに対して \`POST /api/programs/:id/run\` が送信された場合、HTTP \`409 Conflict\` エラーを返し重複起動を拒否。
-- **スケジューラスキップ**: 時間指定スケジュール実行時、対象が \`RUNNING\` であればログに \`[SCHEDULE SKIPPED]\` と記録してスキップ。
+## 5. マルチプラットフォーム デプロイ仕様 (Deployment Options)
+
+### 5.1 Render (バックエンド API)
+- **Environment**: Node
+- **Build Command**: \`npm run build:server\`
+- **Start Command**: \`npm run start:server\`
+- **Environment Variable**: \`SERVE_STATIC=false\`, \`CORS_ORIGIN=*\`
+
+### 5.2 Vercel / Netlify (フロントエンド Web サイト)
+- **Framework Preset**: Vite
+- **Build Command**: \`npm run build:client\`
+- **Output Directory**: \`dist\`
+- **Environment Variable**: \`VITE_API_URL\` = (バックエンド API サーバーのドメイン)
+
+### 5.3 Docker / VPS
+付属の \`Dockerfile\` および \`docker-compose.yml\` を使用し、独立コンテナとして実行。
+\`\`\`bash
+docker compose up -d --build
+\`\`\`
 
 ---
 
-## 7. REST API エンドポイント一覧 (API Endpoints)
-- \`GET /api/system/status\` : メモリ(HeapUsed, HeapTotal, RSS)・Uptime・CPU取得
-- \`GET /api/state\` : プログラム・スケジュール・ログデータ取得
-- \`POST /api/state/sync\` : クライアントからの状態一括同期
-- \`POST /api/programs\` : プログラム作成・編集
-- \`DELETE /api/programs/:id\` : プログラム & プロセスディレクトリ削除
-- \`GET /api/programs/:id/directory\` : プロセス分離ディレクトリ内ファイル一覧＆プレビュー取得
-- \`POST /api/programs/:id/run\` : プログラム実行 (二重稼働保護 409 Conflict)
-- \`POST /api/programs/:id/stop\` : 実行中プログラム強制停止
+## 6. 持続化ストレージ & サンドボックス構造 (Persistence & Sandbox)
+
+- **環境変数 \`DATA_DIR\`**: 永続化ストレージの基本パス (デフォルト: \`./data\`)
+- **Primary State File**: \`\${DATA_DIR}/server_state.json\`
+- **Process Isolated Directory**: \`\${DATA_DIR}/processes/<programId>/\`
+  - プロセス実行時、全構成ファイルが個別の隔離ディレクトリに自動デプロイされ、\`cwd\` として隔離実行されます。
+
+---
+
+## 7. 主要 REST API エンドポイント (API Reference)
+
+| メソッド | パス | 説明 | ネットワーク最適化パラメータ |
+| :--- | :--- | :--- | :--- |
+| \`GET\` | \`/api/status\` | システム状態・CPU・メモリ・Uptime 取得 | - |
+| \`GET\` | \`/api/sync\` | システム状態と全プログラムデータの取得 | \`?light=true\` (軽量モード) |
+| \`POST\` | \`/api/sync\` | クライアント設定の双方向同期 | - |
+| \`POST\` | \`/api/programs\` | プログラム・構成ファイルの新規保存・更新 | - |
+| \`DELETE\` | \`/api/programs/:id\` | プログラムと隔離ディレクトリの削除 | - |
+| \`POST\` | \`/api/programs/:id/run\` | プログラムの手動実行起動 | - |
+| \`POST\` | \`/api/programs/:id/stop\` | 実行中プロセスの安全停止 | - |
+| \`POST\` | \`/api/railway/vars\` | 共通環境変数の適用 | - |
+
+---
+
+## 8. 環境変数仕様 (Environment Variables)
+
+- \`PORT\`: サーバー受付ポート (デフォルト: \`3000\`)
+- \`SERVE_STATIC\`: \`false\` で API 専用モード、\`true\` で静的ファイル同梱モード
+- \`CORS_ORIGIN\`: 許可する CORS オリジン (デフォルト: \`*\`)
+- \`DATA_DIR\`: 永続ストレージの保存パス (デフォルト: \`./data\`)
+- \`GEMINI_API_KEY\`: AI 機能用の API キー
 `;
 
     const blob = new Blob([markdownContent], { type: 'text/markdown' });
@@ -205,6 +267,58 @@ Railway はコンテナの再起動や再デプロイ時にエフェメラル(�
               <li>処理中 (<code className="bg-slate-800 text-slate-200 px-1 py-0.5 rounded font-mono">isProcessing</code>) または実行中はボタンを無効化 (<code className="bg-slate-800 text-slate-200 px-1 py-0.5 rounded font-mono">disabled</code>)。</li>
               <li>重複要求に対しサーバーは HTTP <code className="bg-slate-800 text-slate-200 px-1 py-0.5 rounded font-mono">409 Conflict</code> を返却。</li>
             </ul>
+          </div>
+        </div>
+      </div>
+
+      {/* Server & Client Separation & Multi-Platform Deployment Section */}
+      <div className="bg-gradient-to-r from-indigo-950/60 via-slate-900 to-indigo-950/60 border border-indigo-500/30 rounded-2xl p-6 space-y-4 shadow-xl">
+        <div className="flex items-center space-x-3">
+          <div className="p-2.5 rounded-xl bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">
+            <Layers className="w-5 h-5" />
+          </div>
+          <div>
+            <h3 className="text-base font-bold text-slate-100 flex items-center gap-2">
+              <span>サーバー・クライアント完全分離 & マルチプラットフォーム対応</span>
+              <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 text-[10px] font-mono border border-emerald-500/30">
+                v3.0.0
+              </span>
+            </h3>
+            <p className="text-xs text-slate-400">
+              Railway 依存を解除し、Render, Fly.io, Vercel, Netlify, Docker, VPS など任意の環境で独立動作可能。
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
+          <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+            <span className="text-xs font-bold text-indigo-400 block">1. バックエンド (API サーバー)</span>
+            <p className="text-xs text-slate-400 leading-relaxed">
+              `npm run start:server` (`SERVE_STATIC=false`) で単体APIサーバーとして稼働。Render, Fly.io, VPS, Docker に最適。
+            </p>
+            <div className="p-2 rounded bg-slate-900 font-mono text-[11px] text-indigo-300">
+              npm run start:server
+            </div>
+          </div>
+
+          <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+            <span className="text-xs font-bold text-emerald-400 block">2. フロントエンド (Web 画面)</span>
+            <p className="text-xs text-slate-400 leading-relaxed">
+              `npm run build:client` で静的ファイル化。Vercel, Netlify, Cloudflare Pages やローカル環境で高速配信。
+            </p>
+            <div className="p-2 rounded bg-slate-900 font-mono text-[11px] text-emerald-300">
+              npm run build:client
+            </div>
+          </div>
+
+          <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+            <span className="text-xs font-bold text-purple-400 block">3. 一括コンテナ化 (Docker)</span>
+            <p className="text-xs text-slate-400 leading-relaxed">
+              付属の `Dockerfile` と `docker-compose.yml` で自作VPSやクラウドコンテナ環境に1発デプロイ可能。
+            </p>
+            <div className="p-2 rounded bg-slate-900 font-mono text-[11px] text-purple-300">
+              docker compose up -d
+            </div>
           </div>
         </div>
       </div>

@@ -65,7 +65,7 @@ export const Header: React.FC<HeaderProps> = ({
           {systemStatus?.connected ? (
             <>
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              <span className="text-slate-200 font-medium hidden md:inline">Railway 接続中</span>
+              <span className="text-slate-200 font-medium hidden md:inline">API サーバー 接続中</span>
             </>
           ) : (
             <>
@@ -74,7 +74,7 @@ export const Header: React.FC<HeaderProps> = ({
             </>
           )}
           <span className="ml-1 text-[10px] font-mono px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-bold">
-            v2.4.0
+            v3.0.0
           </span>
         </div>
 

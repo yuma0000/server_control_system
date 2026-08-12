@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  # Universal Backend API Server
+  api-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: node_api_server
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - NODE_ENV=production
+      - SERVE_STATIC=false
+      - CORS_ORIGIN=*
+      - DATA_DIR=/app/data
+    volumes:
+      - server_data:/app/data
+    restart: unless-stopped
+
+volumes:
+  server_data:
+    driver: local

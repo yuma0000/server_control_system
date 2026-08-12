@@ -12,6 +12,9 @@ import { TechSpecView } from './components/TechSpecView';
 import { Program, LogEntry, RailwayEnvVar, SystemStatus, AppStatePayload } from './types';
 
 const LOCAL_STORAGE_KEY = 'RAILWAY_SERVER_MGMT_STATE_V1';
+const API_BASE_URL_KEY = 'RAILWAY_CUSTOM_API_BASE_URL';
+const POLL_INTERVAL_KEY = 'RAILWAY_POLL_INTERVAL_SEC';
+const LIGHT_SYNC_KEY = 'RAILWAY_USE_LIGHT_SYNC';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<string>('dashboard');
@@ -25,24 +28,70 @@ export default function App() {
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
 
+  // Network Optimization & Separation States
+  const [customApiBaseUrl, setCustomApiBaseUrl] = useState<string>(() => {
+    return localStorage.getItem(API_BASE_URL_KEY) || '';
+  });
+  const [pollIntervalSec, setPollIntervalSec] = useState<number>(() => {
+    return parseInt(localStorage.getItem(POLL_INTERVAL_KEY) || '5', 10);
+  });
+  const [useLightSync, setUseLightSync] = useState<boolean>(() => {
+    return localStorage.getItem(LIGHT_SYNC_KEY) !== 'false';
+  });
+
   // Editor Modal state
   const [isEditorModalOpen, setIsEditorModalOpen] = useState<boolean>(false);
   const [editingProgram, setEditingProgram] = useState<Program | null>(null);
 
+  // Helper to format endpoint with custom API server URL
+  const getApiUrl = useCallback((path: string) => {
+    const base = customApiBaseUrl.trim().replace(/\/+$/, '');
+    if (!base) return path;
+    return `${base}${path.startsWith('/') ? path : '/' + path}`;
+  }, [customApiBaseUrl]);
+
+  // Network handlers
+  const handleSaveApiBaseUrl = (url: string) => {
+    setCustomApiBaseUrl(url);
+    localStorage.setItem(API_BASE_URL_KEY, url);
+  };
+
+  const handleSavePollIntervalSec = (sec: number) => {
+    setPollIntervalSec(sec);
+    localStorage.setItem(POLL_INTERVAL_KEY, sec.toString());
+  };
+
+  const handleToggleLightSync = (enabled: boolean) => {
+    setUseLightSync(enabled);
+    localStorage.setItem(LIGHT_SYNC_KEY, enabled ? 'true' : 'false');
+  };
 
   // Fetch full state from Express backend
   const fetchStateFromBackend = useCallback(async () => {
     try {
+      const syncPath = `/api/sync${useLightSync ? '?light=true' : ''}`;
       const [syncRes, statusRes] = await Promise.all([
-        fetch('/api/sync'),
-        fetch('/api/status')
+        fetch(getApiUrl(syncPath)),
+        fetch(getApiUrl('/api/status'))
       ]);
 
       const isSyncJson = syncRes.ok && syncRes.headers.get('content-type')?.includes('application/json');
       if (isSyncJson) {
         const syncData = await syncRes.json();
         if (Array.isArray(syncData.programs)) {
-          setPrograms(syncData.programs);
+          if (syncData.isLight) {
+            setPrograms(prev => syncData.programs.map((lp: Program) => {
+              const existing = prev.find(p => p.id === lp.id);
+              if (!existing) return lp;
+              return {
+                ...existing,
+                ...lp,
+                files: existing.files && existing.files.length > 0 ? existing.files : lp.files
+              };
+            }));
+          } else {
+            setPrograms(syncData.programs);
+          }
         }
         if (Array.isArray(syncData.logs)) {
           setLogs(syncData.logs);
@@ -54,7 +103,6 @@ export default function App() {
           setLastSyncedAt(syncData.lastSyncedAt);
         }
 
-        // Also update LocalStorage backup on client
         localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify({
           programs: syncData.programs,
           railwayEnvVars: syncData.railwayEnvVars,
@@ -69,8 +117,9 @@ export default function App() {
       }
     } catch (err) {
       console.error('Error fetching state from backend:', err);
+      setSystemStatus(prev => prev ? { ...prev, connected: false } : null);
     }
-  }, []);
+  }, [getApiUrl, useLightSync]);
 
   // Initial Sync & Boot Logic
   useEffect(() => {
@@ -79,21 +128,14 @@ export default function App() {
       
       try {
         const [syncRes, statusRes] = await Promise.all([
-          fetch('/api/sync'),
-          fetch('/api/status')
+          fetch(getApiUrl('/api/sync')),
+          fetch(getApiUrl('/api/status'))
         ]);
-
-        let serverHasPrograms = false;
 
         const isSyncJson = syncRes.ok && syncRes.headers.get('content-type')?.includes('application/json');
         if (isSyncJson) {
           const syncData = await syncRes.json();
-          if (Array.isArray(syncData.programs)) {
-            setPrograms(syncData.programs);
-            if (syncData.programs.length > 0) {
-              serverHasPrograms = true;
-            }
-          }
+          if (Array.isArray(syncData.programs)) setPrograms(syncData.programs);
           if (Array.isArray(syncData.logs)) setLogs(syncData.logs);
           if (Array.isArray(syncData.railwayEnvVars)) setRailwayEnvVars(syncData.railwayEnvVars);
           if (syncData.lastSyncedAt) setLastSyncedAt(syncData.lastSyncedAt);
@@ -119,31 +161,40 @@ export default function App() {
 
     initBootSync();
 
-    // Live polling every 3.5 seconds
-    const interval = setInterval(fetchStateFromBackend, 3500);
+    if (pollIntervalSec <= 0) return; // Manual mode only
+
+    const interval = setInterval(fetchStateFromBackend, pollIntervalSec * 1000);
     return () => clearInterval(interval);
-  }, [fetchStateFromBackend]);
+  }, [fetchStateFromBackend, getApiUrl, pollIntervalSec]);
 
   // Actions
   const handleRunProgram = async (id: string) => {
+    setPrograms(prev => prev.map(p => p.id === id ? { ...p, status: 'RUNNING' } : p));
     setIsProcessing(true);
     try {
-      await fetch(`/api/programs/${id}/run`, { method: 'POST' });
+      const res = await fetch(getApiUrl(`/api/programs/${id}/run`), { method: 'POST' });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        console.warn('Run response notification:', errJson.error || 'Duplicate execution blocked.');
+      }
       await fetchStateFromBackend();
     } catch (err) {
       console.error('Error running program:', err);
+      await fetchStateFromBackend();
     } finally {
       setIsProcessing(false);
     }
   };
 
   const handleStopProgram = async (id: string) => {
+    setPrograms(prev => prev.map(p => p.id === id ? { ...p, status: 'STOPPED', runningPid: undefined } : p));
     setIsProcessing(true);
     try {
-      await fetch(`/api/programs/${id}/stop`, { method: 'POST' });
+      await fetch(getApiUrl(`/api/programs/${id}/stop`), { method: 'POST' });
       await fetchStateFromBackend();
     } catch (err) {
       console.error('Error stopping program:', err);
+      await fetchStateFromBackend();
     } finally {
       setIsProcessing(false);
     }
@@ -152,7 +203,7 @@ export default function App() {
   const handleSaveProgram = async (prog: Program) => {
     setIsProcessing(true);
     try {
-      await fetch('/api/programs', {
+      await fetch(getApiUrl('/api/programs'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(prog)
@@ -168,21 +219,16 @@ export default function App() {
   const handleDeleteProgram = async (id: string) => {
     setIsProcessing(true);
     try {
-      // 1. Optimistic state update in React UI
       const nextPrograms = programs.filter(p => p.id !== id);
       setPrograms(nextPrograms);
 
-      // 2. Immediately update local storage so deleted items won't restore
       localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify({
         programs: nextPrograms,
         railwayEnvVars,
         lastSyncedAt: new Date().toISOString()
       }));
 
-      // 3. Perform backend API delete
-      await fetch(`/api/programs/${id}`, { method: 'DELETE' });
-
-      // 4. Re-sync backend state
+      await fetch(getApiUrl(`/api/programs/${id}`), { method: 'DELETE' });
       await fetchStateFromBackend();
     } catch (err) {
       console.error('Error deleting program:', err);
@@ -195,7 +241,7 @@ export default function App() {
   const handleManualSync = async () => {
     setIsSyncing(true);
     try {
-      await fetch('/api/sync', {
+      await fetch(getApiUrl('/api/sync'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -214,7 +260,7 @@ export default function App() {
 
   const handleClearLogs = async () => {
     try {
-      await fetch('/api/logs', { method: 'DELETE' });
+      await fetch(getApiUrl('/api/logs'), { method: 'DELETE' });
       fetchStateFromBackend();
     } catch (err) {
       console.error('Error clearing logs:', err);
@@ -223,7 +269,7 @@ export default function App() {
 
   const handleSaveEnvVars = async (vars: RailwayEnvVar[]) => {
     try {
-      await fetch('/api/railway/vars', {
+      await fetch(getApiUrl('/api/railway/vars'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ vars })
@@ -383,6 +429,12 @@ export default function App() {
               onImportBackup={handleImportBackup}
               isSyncing={isSyncing}
               lastSyncedAt={lastSyncedAt}
+              customApiBaseUrl={customApiBaseUrl}
+              onSaveApiBaseUrl={handleSaveApiBaseUrl}
+              pollIntervalSec={pollIntervalSec}
+              onSavePollIntervalSec={handleSavePollIntervalSec}
+              useLightSync={useLightSync}
+              onToggleLightSync={handleToggleLightSync}
             />
           )}
 

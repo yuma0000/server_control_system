@@ -1,80 +1,122 @@
-# Railway サーバー管理システム (Railway Server Management Portal) 技術仕様書
+# Universal Node.js API サーバー & 管理システム 技術仕様書 (v3.0.0)
 
 ## 1. システム概要 (System Overview)
-本システムは、**Railway パース (PaaS)** クラウド環境上でマルチ言語プログラム (Node.js, Python, Bash, PHP, Ruby) をサンドボックス安全に実行・停止・管理・時間指定予約 (スケジュール) 実行し、ログ確認や環境変数の動的制御を行うための統合管理ポータルシステムです。
-最新のアップデートにより、**1つのプロセスに対する複数ファイルの組み込み (マルチコード)、プロセス分離型ストレージ、ファイル読込機能、ファイル名変更、コード折りたたみ表示** に対応しました。
+本システムは、マルチ言語プログラム (Node.js, Python, Bash, PHP, Ruby) をサンドボックス環境で安全に実行・停止・予約（スケジュール）実行・ログキャプチャし、環境変数およびプロセス分離ストレージの管理を行う統合プラットフォームです。
+
+v3.0.0 により、**サーバー (API Backend)** と **クライアント (Vite/React SPA)** の完全分離設計、**Railway トラフィック制限対策（Gzip圧縮・軽量ポーリング・CORS対応）**、および **`start.sh` から `node index.js` 実行時のプロセス残留防止策** を仕様化しています。
 
 ---
 
-## 2. アーキテクチャ & 持続化設計 (Architecture & Persistence)
-Railway はコンテナの再起動や再デプロイ時にエフェメラル (一時的) なファイルシステムが初期化される特性を持っています。本システムではこの課題を解決するため、**ハイブリッド同期持続化モデル (Client-Server State Sync)** を採用しています。
+## 2. アーキテクチャ & サーバー/クライアント分離仕様 (Server & Client Separation)
 
-- **Primary State Storage**: `/data/server_state.json`
-- **Process Isolated Storage**: `/data/processes/<programId>/` (各プロセス専用のストレージディレクトリ)
-- **Backup / Source of Truth (Client)**: ブラウザの `localStorage` (`RAILWAY_SERVER_MGMT_STATE_V1`)
-- **同期メカニズム**:
-  1. **Boot Sync**: Railway 起動時、サーバ内にデータが無い場合クライアントがバックアップを自動適用。
-  2. **Manual & Periodical Sync**: Web UI からワンクリックでプログラム設定・スケジューラ設定を双方向同期。
+### 2.1 独立動作モード (Standalone API vs Fullstack)
+環境変数 `SERVE_STATIC` の値により、サーバーの動作モードを動的に切り替えます。
 
----
+- **`SERVE_STATIC=false` (スタンドアロン API モード / 推奨)**:
+  - サーバーは REST API のみに専念します。
+  - 静的ファイル (HTML/JS/CSS) の配信を行わないため、クラウドサーバー (Railway, Render, Fly.io 等) のネットワーク転送量 (Egress Traffic) を最大 100% 削減可能。
+  - フロントエンドは Vercel, Netlify, Cloudflare Pages, またはローカル端末から接続します。
+- **`SERVE_STATIC=true` (フルスタック統合モード)**:
+  - 単一の Node.js プロセスで API と ビルド済み React SPA (`dist/`) の両方を配信します。
 
-## 3. マルチファイル & プロセス分離ストレージ (Multi-File & Isolated Storage)
-1つのプロセスに複数のプログラムコードやデータファイルを取り込むことができます。
-
-- **データ構造 (`Program` & `CodeFile`)**:
-  - `files: CodeFile[]` (`id`, `filename`, `content`, `isEntry`)
-  - `isEntry === true` のファイルが実行時のメインエントリーポイントとなります。
-- **プロセス分離ディレクトリ**:
-  - プロセス実行時、`/data/processes/<programId>/` 配下に全構成ファイルが書き出されます。
-  - プロセス削除時には該当ディレクトリ内のファイルも安全に消去されます。
-- **外部ファイル読み込み (File Reader / Upload)**:
-  - ローカルPC上のコードや設定ファイル (JS, Python, Shell, JSON, CSV, TXT等) をダイレクトにプロセス内へ読み込み可能。
-- **ファイル名の動的変更 (Filename Editor)**:
-  - UI上で各ファイルのファイル名を自由に書き換え可能。
-- **コード折りたたみ表示 (Collapsible Code UI)**:
-  - エディタおよびカードUI上でアコーディオン表示 (折りたたみ/展開) が可能で、長大なコードや複数ファイルがあっても見やすいレイアウトを実現。
+### 2.2 実行コマンド体系 (`package.json`)
+- `npm run build:server`: `esbuild` により `server.ts` を単一 CommonJS バンドル `dist/server.cjs` へコンパイル。
+- `npm run start:server`: `SERVE_STATIC=false` で API サーバーのみを起動。
+- `npm run build:client`: Vite により React フロントエンドを `dist/` に静的ビルド。
+- `npm run dev:client`: クライアント単体開発サーバー (ポート 5173 / 3000) 起動。
 
 ---
 
-## 4. サンドボックス実行エンジン (Sandbox Execution Engine)
-- **非同期プロセス管理**: `child_process.spawn` を使用し、プロセス分離ディレクトリ (`cwd: /data/processes/<programId>`) を作業ディレクトリとして実行。
-- **対応言語と実行環境**:
-  - **Node.js**: `node <entry_file>`
-  - **Python**: `python3 <entry_file>`
-  - **Bash**: `bash <entry_file>`
-  - **PHP**: `php <entry_file>`
-  - **Ruby**: `ruby <entry_file>`
-- **ログ収集**: `stdout` / `stderr` をリアルタイムキャプチャし、最大500行まで保持。
+## 3. Railway ネットワーク通信量削減仕様 (Network Bandwidth Optimization)
+
+Railway などの転送量従量課金 / 制限対策として以下の3段階最適化を実施しています。
+
+1. **HTTP Gzip / Deflate レスポンス圧縮 (`compression`)**:
+   - Express ミドルウェアで全レスポンスを圧縮し、JSON データサイズを 70〜80% 削減。
+2. **軽量ステータスポーリング API (`GET /api/sync?light=true`)**:
+   - ポーリング時にはプログラムのコードソース本文（`content`, `code`）を除外し、ステータスとログのみを返却。転送量を約 95% 削減。
+3. **CORS (Cross-Origin Resource Sharing) 許可設定**:
+   - `Access-Control-Allow-Origin: *` (または `CORS_ORIGIN` 環境変数) により、別ドメインやローカル端末からの安全なクロスオリジン API 呼び出しを許可。
 
 ---
 
-## 5. 時間指定スケジューラー (Scheduler System)
-- **精度**: 毎分00秒のタイマーチェック (`setInterval` 10秒精度のポーリング)。
-- **重複実行防止**: 指定時刻にすでに該当プログラムが `RUNNING` 状態である場合、多重実行を回避しログにスキップ記録。
-- **ワンショット・繰り返し実行**: 設定された指定時刻 (HH:MM) に自動起動。
+## 4. `start.sh` から `node index.js` 実行時のプロセス残留対策 (Process Leak Solutions)
+
+シェルスクリプト `start.sh` 経由で Node.js プロセスを起動・停止する際、`node index.js` がバックグラウンドにゾンビプロセスとして残る問題に対する仕様解決策です。
+
+### 解決策 1: `exec` キーワードの使用（標準推奨）
+シェルプロセス (bash) を `node` プロセスに直接置換 (`exec`) します。
+停止シグナル (`SIGTERM` / `SIGINT`) が直接 Node.js プロセスに届くため、親プロセス終了に伴うゾンビ化が発生しません。
+```bash
+#!/bin/bash
+# start.sh
+exec node index.js
+```
+
+### 解決策 2: シグナルトラップ (`trap`) による子プロセス管理
+事前に環境構築やログ出力等の前処理が必要な場合、`trap` を使用してシグナルを受信した際に子プロセス PID に強制終了命令を発行します。
+```bash
+#!/bin/bash
+# start.sh
+trap 'kill -TERM "$PID"; wait "$PID"' TERM INT EXIT
+
+node index.js &
+PID=$!
+wait "$PID"
+```
 
 ---
 
-## 6. Railway API & 環境変数連携
-- **Railway API 統合**: Railway トークンとプロジェクトIDを設定することで、外部から環境変数の取得・更新が可能。
-- **プロセス環境変数への自動反映**: プロセス毎に設定された環境変数およびグローバル環境変数は、実行時にプロセスへ注入。
+## 5. マルチプラットフォーム デプロイ仕様 (Deployment Options)
+
+### 5.1 Render (バックエンド API)
+- **Environment**: Node
+- **Build Command**: `npm run build:server`
+- **Start Command**: `npm run start:server`
+- **Environment Variable**: `SERVE_STATIC=false`, `CORS_ORIGIN=*`
+
+### 5.2 Vercel / Netlify (フロントエンド Web サイト)
+- **Framework Preset**: Vite
+- **Build Command**: `npm run build:client`
+- **Output Directory**: `dist`
+- **Environment Variable**: `VITE_API_URL` = (バックエンド API サーバーのドメイン)
+
+### 5.3 Docker / VPS
+付属の `Dockerfile` および `docker-compose.yml` を使用し、独立コンテナとして実行。
+```bash
+docker compose up -d --build
+```
 
 ---
 
-## 7. REST API エンドポイント一覧 (API Endpoints)
-- `GET /api/system/status` : メモリ・Uptime・接続状況取得
-- `GET /api/state` : プログラム・スケジュール・ログデータ取得
-- `POST /api/state/sync` : クライアントからの状態一括同期
-- `POST /api/programs` : プログラム (複数ファイル含む) 作成・編集
-- `DELETE /api/programs/:id` : プログラム & プロセスディレクトリ削除
-- `POST /api/programs/:id/run` : プログラム手動実行
-- `POST /api/programs/:id/stop` : 実行中プログラム強制停止
-- `POST /api/schedules` : スケジュール設定更新
-- `POST /api/railway/variables` : Railway環境変数更新
+## 6. 持続化ストレージ & サンドボックス構造 (Persistence & Sandbox)
+
+- **環境変数 `DATA_DIR`**: 永続化ストレージの基本パス (デフォルト: `./data`)
+- **Primary State File**: `${DATA_DIR}/server_state.json`
+- **Process Isolated Directory**: `${DATA_DIR}/processes/<programId>/`
+  - プロセス実行時、全構成ファイルが個別の隔離ディレクトリに自動デプロイされ、`cwd` として隔離実行されます。
 
 ---
 
-## 8. モバイル・レスポンシブ最適化 (Mobile Responsiveness)
-- Breakpoints: Tailwind CSS `sm` (640px), `md` (768px), `lg` (1024px)
-- **ドロワー型サイドバー**: スマホ画面ではハンバーガーメニューから呼び出すスライドイン方式を採用。
-- **タッチターゲット**: 全ボタン最小 44px の高さを確保し、モバイル操作性を確保。
+## 7. 主要 REST API エンドポイント (API Reference)
+
+| メソッド | パス | 説明 | ネットワーク最適化パラメータ |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/api/status` | システム状態・CPU・メモリ・Uptime 取得 | - |
+| `GET` | `/api/sync` | システム状態と全プログラムデータの取得 | `?light=true` (軽量モード) |
+| `POST` | `/api/sync` | クライアント設定の双方向同期 | - |
+| `POST` | `/api/programs` | プログラム・構成ファイルの新規保存・更新 | - |
+| `DELETE` | `/api/programs/:id` | プログラムと隔離ディレクトリの削除 | - |
+| `POST` | `/api/programs/:id/run` | プログラムの手動実行起動 | - |
+| `POST` | `/api/programs/:id/stop` | 実行中プロセスの安全停止 | - |
+| `POST` | `/api/railway/vars` | 共通環境変数の適用 | - |
+
+---
+
+## 8. 環境変数仕様 (Environment Variables)
+
+- `PORT`: サーバー受付ポート (デフォルト: `3000`)
+- `SERVE_STATIC`: `false` で API 専用モード、`true` で静的ファイル同梱モード
+- `CORS_ORIGIN`: 許可する CORS オリジン (デフォルト: `*`)
+- `DATA_DIR`: 永続ストレージの保存パス (デフォルト: `./data`)
+- `GEMINI_API_KEY`: AI 機能用の API キー
