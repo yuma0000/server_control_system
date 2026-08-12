@@ -1,11 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { X, Plus, Trash2, Code2, Clock, FileCode } from 'lucide-react';
+import { X, Plus, Trash2, Code2, Clock, FileCode, Sliders, Eye, EyeOff, Key } from 'lucide-react';
 import { Program, ProgramLanguage, CodeFile } from '../types';
 
 interface ProgramModalProps {
   program: Program | null;
   onClose: () => void;
   onSave: (prog: Partial<Program>) => void;
+}
+
+interface EnvVarPair {
+  key: string;
+  value: string;
+  isSecret?: boolean;
 }
 
 export const ProgramModal: React.FC<ProgramModalProps> = ({
@@ -22,6 +28,8 @@ export const ProgramModal: React.FC<ProgramModalProps> = ({
   const [activeFileId, setActiveFileId] = useState('f-1');
   const [scheduleEnabled, setScheduleEnabled] = useState(false);
   const [scheduleTime, setScheduleTime] = useState('12:00');
+  const [progEnvVars, setProgEnvVars] = useState<EnvVarPair[]>([]);
+  const [showSecrets, setShowSecrets] = useState<Record<number, boolean>>({});
 
   useEffect(() => {
     if (program) {
@@ -34,6 +42,28 @@ export const ProgramModal: React.FC<ProgramModalProps> = ({
       if (program.files && program.files[0]) setActiveFileId(program.files[0].id);
       setScheduleEnabled(program.schedule?.enabled || false);
       setScheduleTime(program.schedule?.timeStr || '12:00');
+      
+      if (program.envVars && typeof program.envVars === 'object') {
+        const pairs = Object.entries(program.envVars).map(([key, value]) => ({
+          key,
+          value,
+          isSecret: false
+        }));
+        setProgEnvVars(pairs);
+      } else {
+        setProgEnvVars([]);
+      }
+    } else {
+      setName('');
+      setDescription('');
+      setLanguage('nodejs');
+      setFiles([
+        { id: 'f-1', filename: 'index.js', content: 'console.log("Hello Node.js Server!");\n', isEntry: true }
+      ]);
+      setActiveFileId('f-1');
+      setScheduleEnabled(false);
+      setScheduleTime('12:00');
+      setProgEnvVars([]);
     }
   }, [program]);
 
@@ -76,9 +106,30 @@ export const ProgramModal: React.FC<ProgramModalProps> = ({
     }));
   };
 
+  const handleAddEnvVar = () => {
+    setProgEnvVars([...progEnvVars, { key: '', value: '', isSecret: false }]);
+  };
+
+  const handleRemoveEnvVar = (index: number) => {
+    setProgEnvVars(progEnvVars.filter((_, i) => i !== index));
+  };
+
+  const handleUpdateEnvVar = (index: number, field: keyof EnvVarPair, val: any) => {
+    const updated = [...progEnvVars];
+    updated[index] = { ...updated[index], [field]: val };
+    setProgEnvVars(updated);
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
+
+    const envVarsObj: Record<string, string> = {};
+    progEnvVars.forEach(v => {
+      if (v.key.trim()) {
+        envVarsObj[v.key.trim()] = v.value;
+      }
+    });
 
     onSave({
       id: program?.id,
@@ -86,6 +137,7 @@ export const ProgramModal: React.FC<ProgramModalProps> = ({
       description,
       language,
       files,
+      envVars: envVarsObj,
       schedule: {
         enabled: scheduleEnabled,
         timeStr: scheduleTime,
@@ -174,6 +226,75 @@ export const ProgramModal: React.FC<ProgramModalProps> = ({
                   className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs text-slate-100 font-mono"
                 />
                 <span className="text-[11px] text-slate-400">※実行中であれば二重起動を自動回避します</span>
+              </div>
+            )}
+          </div>
+
+          {/* Process-Specific Environment Variables Section */}
+          <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <span className="text-xs font-bold text-slate-200 flex items-center space-x-2">
+                  <Sliders className="w-4 h-4 text-emerald-400" />
+                  <span>プロセス専用環境変数 ({progEnvVars.length}件)</span>
+                </span>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  このプログラム起動時に <code>process.env</code> (Python: <code>os.environ</code>) へ渡す環境変数を設定します。
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleAddEnvVar}
+                className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-slate-200 border border-slate-700 flex items-center space-x-1 shrink-0"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>変数追加</span>
+              </button>
+            </div>
+
+            {progEnvVars.length === 0 ? (
+              <div className="py-3 text-center text-slate-500 text-xs border border-dashed border-slate-800/80 rounded-lg">
+                専用環境変数は登録されていません。必要な場合は「変数追加」を押してください。
+              </div>
+            ) : (
+              <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                {progEnvVars.map((item, idx) => (
+                  <div key={idx} className="flex items-center gap-2 p-2 rounded-lg bg-slate-900 border border-slate-800">
+                    <input
+                      type="text"
+                      value={item.key}
+                      onChange={(e) => handleUpdateEnvVar(idx, 'key', e.target.value)}
+                      placeholder="KEY (例: API_TOKEN)"
+                      className="px-2.5 py-1 rounded bg-slate-950 border border-slate-800 text-xs text-slate-200 font-mono flex-1 focus:outline-none focus:border-indigo-500"
+                    />
+                    <div className="relative flex-1">
+                      <input
+                        type={item.isSecret && !showSecrets[idx] ? 'password' : 'text'}
+                        value={item.value}
+                        onChange={(e) => handleUpdateEnvVar(idx, 'value', e.target.value)}
+                        placeholder="VALUE"
+                        className="w-full px-2.5 py-1 pr-8 rounded bg-slate-950 border border-slate-800 text-xs text-slate-200 font-mono focus:outline-none focus:border-indigo-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowSecrets({ ...showSecrets, [idx]: !showSecrets[idx] })}
+                        className="absolute right-2 top-1.5 text-slate-400 hover:text-slate-200"
+                      >
+                        {showSecrets[idx] ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveEnvVar(idx)}
+                      className="p-1 rounded text-rose-400 hover:bg-rose-500/10 shrink-0"
+                      title="削除"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
               </div>
             )}
           </div>

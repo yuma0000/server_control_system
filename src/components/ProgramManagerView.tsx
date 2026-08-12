@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Play, Square, Code2, Plus, Search, Trash2, Edit3, Clock, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Play, Square, Code2, Plus, Search, Trash2, Edit3, Clock, CheckCircle2, AlertCircle, Sliders } from 'lucide-react';
 import { Program } from '../types';
 
 interface ProgramManagerViewProps {
@@ -103,12 +103,21 @@ export const ProgramManagerView: React.FC<ProgramManagerViewProps> = ({
 
                 <p className="text-xs text-slate-400 line-clamp-2">{prog.description || 'メモなし'}</p>
 
-                {prog.schedule?.enabled && (
-                  <div className="flex items-center text-xs text-purple-300 pt-1 font-mono">
-                    <Clock className="w-3.5 h-3.5 mr-1 text-purple-400" />
-                    <span>毎日 {prog.schedule.timeStr} 自動起動</span>
-                  </div>
-                )}
+                <div className="space-y-1">
+                  {prog.schedule?.enabled && (
+                    <div className="flex items-center text-xs text-purple-300 font-mono">
+                      <Clock className="w-3.5 h-3.5 mr-1 text-purple-400 shrink-0" />
+                      <span>毎日 {prog.schedule.timeStr} 自動起動</span>
+                    </div>
+                  )}
+
+                  {prog.envVars && Object.keys(prog.envVars).length > 0 && (
+                    <div className="flex items-center text-xs text-emerald-300 font-mono">
+                      <Sliders className="w-3.5 h-3.5 mr-1 text-emerald-400 shrink-0" />
+                      <span>専用環境変数: {Object.keys(prog.envVars).length} 件設定</span>
+                    </div>
+                  )}
+                </div>
               </div>
 
               {/* Actions Footer */}
