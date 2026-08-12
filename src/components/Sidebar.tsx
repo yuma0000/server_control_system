@@ -70,17 +70,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
           )}
         </div>
 
-        {/* Railway Status Indicator */}
+        {/* Server Status Indicator */}
         <div className="mx-3 my-4 p-3 rounded-lg bg-slate-800/50 border border-slate-800 text-xs">
           <div className="flex items-center justify-between mb-1.5">
-            <span className="text-slate-400 font-medium">Railway ステータス</span>
+            <span className="text-slate-400 font-medium">サーバー ステータス</span>
             <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 mr-1 animate-pulse"></span>
               稼働中
             </span>
           </div>
           <div className="text-[11px] text-slate-300 font-mono truncate">
-            {systemStatus?.railwayServiceName || 'railway-app-container'}
+            {systemStatus?.platformName || systemStatus?.serverHost || 'api-server-container'}
           </div>
           <div className="mt-2 text-[10px] text-slate-400 flex items-center justify-between">
             <span>メモリ: {systemStatus?.memoryUsageMb || 0} MB</span>

@@ -172,9 +172,10 @@ function saveStateToDisk() {
     const payload: AppStatePayload = {
       programs: programs.map(normalizeProgram),
       logs: logs.slice(0, 500), // keep recent 500 logs
+      serverEnvVars: railwayEnvVars,
       railwayEnvVars,
       lastSyncedAt: new Date().toISOString(),
-      clientVersion: '1.0.0'
+      clientVersion: '3.0.0'
     };
     fs.writeFileSync(STATE_FILE, JSON.stringify(payload, null, 2), 'utf-8');
     lastSyncedAt = payload.lastSyncedAt;
@@ -558,6 +559,12 @@ app.get(['/api/status', '/api/system/status'], (req, res) => {
   const memory = process.memoryUsage();
   const uptime = process.uptime();
   
+  const platformName = process.env.RENDER ? 'Render' : 
+                       process.env.FLY_APP_NAME ? `Fly.io (${process.env.FLY_APP_NAME})` : 
+                       process.env.VERCEL ? 'Vercel Serverless' : 
+                       process.env.RAILWAY_SERVICE_NAME ? `Railway (${process.env.RAILWAY_SERVICE_NAME})` : 
+                       'Node.js API Server';
+
   const status: SystemStatus = {
     connected: true,
     serverUptimeSec: Math.floor(uptime),
@@ -571,8 +578,10 @@ app.get(['/api/status', '/api/system/status'], (req, res) => {
     scheduledProgramsCount: programs.filter(p => p.schedule?.enabled).length,
     lastBootTime: bootTime,
     lastSyncedAt: lastSyncedAt,
-    railwayProjectName: process.env.RAILWAY_PROJECT_NAME || 'Production Container',
-    railwayServiceName: process.env.RAILWAY_SERVICE_NAME || 'Server-Management-App'
+    platformName: platformName,
+    serverHost: process.env.HOST || '0.0.0.0',
+    railwayProjectName: process.env.RAILWAY_PROJECT_NAME || platformName,
+    railwayServiceName: process.env.RAILWAY_SERVICE_NAME || platformName
   };
 
   res.json(status);
@@ -583,7 +592,7 @@ app.get(['/api/sync', '/api/state'], (req, res) => {
   const isLight = req.query.light === 'true';
 
   if (isLight) {
-    // Lightweight polling mode to minimize Railway network egress
+    // Lightweight polling mode to minimize network egress
     const lightPrograms = programs.map(p => ({
       ...p,
       files: p.files.map(f => ({
@@ -598,9 +607,10 @@ app.get(['/api/sync', '/api/state'], (req, res) => {
     return res.json({
       programs: lightPrograms,
       logs: logs.slice(0, 25),
+      serverEnvVars: railwayEnvVars,
       railwayEnvVars,
       lastSyncedAt,
-      clientVersion: '1.0.0',
+      clientVersion: '3.0.0',
       isLight: true
     });
   }
@@ -608,14 +618,16 @@ app.get(['/api/sync', '/api/state'], (req, res) => {
   res.json({
     programs,
     logs,
+    serverEnvVars: railwayEnvVars,
     railwayEnvVars,
     lastSyncedAt,
-    clientVersion: '1.0.0'
+    clientVersion: '3.0.0'
   });
 });
 
 app.post(['/api/sync', '/api/state/sync'], (req, res) => {
-  const { programs: clientPrograms, logs: clientLogs, railwayEnvVars: clientEnvVars, overrideMode } = req.body;
+  const { programs: clientPrograms, logs: clientLogs, serverEnvVars: clientEnvVars1, railwayEnvVars: clientEnvVars2, overrideMode } = req.body;
+  const clientEnvVars = clientEnvVars1 || clientEnvVars2;
 
   if (Array.isArray(clientPrograms)) {
     // Sync client programs while strictly preserving any currently RUNNING state on server
@@ -637,7 +649,7 @@ app.post(['/api/sync', '/api/state/sync'], (req, res) => {
   }
 
   saveStateToDisk();
-  addLog('sys', 'System', 'INFO', `Manual synchronization complete. State saved to Railway server disk.`);
+  addLog('sys', 'System', 'INFO', `Manual synchronization complete. State saved to server disk.`);
 
   res.json({
     success: true,
@@ -789,17 +801,17 @@ app.delete('/api/logs', (req, res) => {
   res.json({ success: true });
 });
 
-// Railway API Proxy & Environment Variables
-app.get('/api/railway/vars', (req, res) => {
+// Server Environment Variables Endpoints
+app.get(['/api/env/vars', '/api/railway/vars'], (req, res) => {
   res.json(railwayEnvVars);
 });
 
-app.post('/api/railway/vars', (req, res) => {
+app.post(['/api/env/vars', '/api/railway/vars'], (req, res) => {
   const { vars } = req.body;
   if (Array.isArray(vars)) {
     railwayEnvVars = vars;
     saveStateToDisk();
-    addLog('sys', 'Railway API', 'INFO', `Updated ${vars.length} Railway environment variables.`);
+    addLog('sys', 'Environment API', 'INFO', `Updated ${vars.length} server environment variables.`);
   }
   res.json({ success: true, vars: railwayEnvVars });
 });

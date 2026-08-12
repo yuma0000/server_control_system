@@ -47,11 +47,14 @@ export interface LogEntry {
   details?: string;
 }
 
-export interface RailwayEnvVar {
+export interface ServerEnvVar {
   key: string;
   value: string;
   isSecret?: boolean;
 }
+
+// Backward compatibility alias
+export type RailwayEnvVar = ServerEnvVar;
 
 export interface ProcessFileEntry {
   filename: string;
@@ -76,6 +79,8 @@ export interface SystemStatus {
   scheduledProgramsCount: number;
   lastBootTime: string;
   lastSyncedAt: string;
+  platformName?: string;
+  serverHost?: string;
   railwayProjectName?: string;
   railwayServiceName?: string;
 }
@@ -83,7 +88,8 @@ export interface SystemStatus {
 export interface AppStatePayload {
   programs: Program[];
   logs: LogEntry[];
-  railwayEnvVars: RailwayEnvVar[];
+  serverEnvVars: ServerEnvVar[];
+  railwayEnvVars?: ServerEnvVar[]; // Backward compatibility
   lastSyncedAt: string;
   clientVersion: string;
 }

@@ -9,12 +9,12 @@ import { SyncManagerView } from './components/SyncManagerView';
 import { LogViewer } from './components/LogViewer';
 import { RailwayApiView } from './components/RailwayApiView';
 import { TechSpecView } from './components/TechSpecView';
-import { Program, LogEntry, RailwayEnvVar, SystemStatus, AppStatePayload } from './types';
+import { Program, LogEntry, ServerEnvVar, SystemStatus, AppStatePayload } from './types';
 
-const LOCAL_STORAGE_KEY = 'RAILWAY_SERVER_MGMT_STATE_V1';
-const API_BASE_URL_KEY = 'RAILWAY_CUSTOM_API_BASE_URL';
-const POLL_INTERVAL_KEY = 'RAILWAY_POLL_INTERVAL_SEC';
-const LIGHT_SYNC_KEY = 'RAILWAY_USE_LIGHT_SYNC';
+const LOCAL_STORAGE_KEY = 'SERVER_MGMT_STATE_V1';
+const API_BASE_URL_KEY = 'CUSTOM_API_BASE_URL';
+const POLL_INTERVAL_KEY = 'POLL_INTERVAL_SEC';
+const LIGHT_SYNC_KEY = 'USE_LIGHT_SYNC';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<string>('dashboard');
@@ -22,7 +22,7 @@ export default function App() {
 
   const [programs, setPrograms] = useState<Program[]>([]);
   const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [railwayEnvVars, setRailwayEnvVars] = useState<RailwayEnvVar[]>([]);
+  const [railwayEnvVars, setRailwayEnvVars] = useState<ServerEnvVar[]>([]);
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<string>('');
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
@@ -30,13 +30,15 @@ export default function App() {
 
   // Network Optimization & Separation States
   const [customApiBaseUrl, setCustomApiBaseUrl] = useState<string>(() => {
-    return localStorage.getItem(API_BASE_URL_KEY) || '';
+    return localStorage.getItem(API_BASE_URL_KEY) || localStorage.getItem('RAILWAY_CUSTOM_API_BASE_URL') || '';
   });
   const [pollIntervalSec, setPollIntervalSec] = useState<number>(() => {
-    return parseInt(localStorage.getItem(POLL_INTERVAL_KEY) || '5', 10);
+    const val = localStorage.getItem(POLL_INTERVAL_KEY) || localStorage.getItem('RAILWAY_POLL_INTERVAL_SEC');
+    return parseInt(val || '5', 10);
   });
   const [useLightSync, setUseLightSync] = useState<boolean>(() => {
-    return localStorage.getItem(LIGHT_SYNC_KEY) !== 'false';
+    const val = localStorage.getItem(LIGHT_SYNC_KEY) ?? localStorage.getItem('RAILWAY_USE_LIGHT_SYNC');
+    return val !== 'false';
   });
 
   // Editor Modal state
@@ -96,8 +98,9 @@ export default function App() {
         if (Array.isArray(syncData.logs)) {
           setLogs(syncData.logs);
         }
-        if (Array.isArray(syncData.railwayEnvVars)) {
-          setRailwayEnvVars(syncData.railwayEnvVars);
+        const vars = syncData.serverEnvVars || syncData.railwayEnvVars;
+        if (Array.isArray(vars)) {
+          setRailwayEnvVars(vars);
         }
         if (syncData.lastSyncedAt) {
           setLastSyncedAt(syncData.lastSyncedAt);
@@ -105,7 +108,7 @@ export default function App() {
 
         localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify({
           programs: syncData.programs,
-          railwayEnvVars: syncData.railwayEnvVars,
+          serverEnvVars: vars,
           lastSyncedAt: new Date().toISOString()
         }));
       }
@@ -137,12 +140,13 @@ export default function App() {
           const syncData = await syncRes.json();
           if (Array.isArray(syncData.programs)) setPrograms(syncData.programs);
           if (Array.isArray(syncData.logs)) setLogs(syncData.logs);
-          if (Array.isArray(syncData.railwayEnvVars)) setRailwayEnvVars(syncData.railwayEnvVars);
+          const vars = syncData.serverEnvVars || syncData.railwayEnvVars;
+          if (Array.isArray(vars)) setRailwayEnvVars(vars);
           if (syncData.lastSyncedAt) setLastSyncedAt(syncData.lastSyncedAt);
 
           localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify({
             programs: syncData.programs,
-            railwayEnvVars: syncData.railwayEnvVars,
+            serverEnvVars: vars,
             lastSyncedAt: new Date().toISOString()
           }));
         }
@@ -224,7 +228,7 @@ export default function App() {
 
       localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify({
         programs: nextPrograms,
-        railwayEnvVars,
+        serverEnvVars: railwayEnvVars,
         lastSyncedAt: new Date().toISOString()
       }));
 
@@ -246,6 +250,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           programs,
+          serverEnvVars: railwayEnvVars,
           railwayEnvVars,
           overrideMode: 'client'
         })
@@ -267,9 +272,9 @@ export default function App() {
     }
   };
 
-  const handleSaveEnvVars = async (vars: RailwayEnvVar[]) => {
+  const handleSaveEnvVars = async (vars: ServerEnvVar[]) => {
     try {
-      await fetch(getApiUrl('/api/railway/vars'), {
+      await fetch(getApiUrl('/api/env/vars'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ vars })
@@ -286,16 +291,17 @@ export default function App() {
     const payload: AppStatePayload = {
       programs,
       logs: logs.slice(0, 300),
+      serverEnvVars: railwayEnvVars,
       railwayEnvVars,
       lastSyncedAt: new Date().toISOString(),
-      clientVersion: '1.0.0'
+      clientVersion: '3.0.0'
     };
 
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `railway-server-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = `server-backup-${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -312,12 +318,14 @@ export default function App() {
         const data = JSON.parse(text);
         if (Array.isArray(data.programs)) {
           setIsSyncing(true);
+          const vars = data.serverEnvVars || data.railwayEnvVars || [];
           await fetch('/api/sync', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               programs: data.programs,
-              railwayEnvVars: data.railwayEnvVars || [],
+              serverEnvVars: vars,
+              railwayEnvVars: vars,
               overrideMode: 'client'
             })
           });
@@ -343,8 +351,8 @@ export default function App() {
       case 'scheduler': return '時間指定（HH:MM）スケジュール';
       case 'logs': return 'リアルタイム実行ログ / 問題確認';
       case 'sync': return '永続化データ同期 & バックアップ';
-      case 'railway': return 'Railway API & 環境変数';
-      case 'spec': return '技術仕様書 & システムドキュメント';
+      case 'railway': return 'サーバー環境変数 & API設定';
+      case 'spec': return '分離・デプロイ仕様書 & ドキュメント';
       default: return '管理画面';
     }
   };
@@ -368,7 +376,7 @@ export default function App() {
         {/* Top Header */}
         <Header
           title={getTabTitle()}
-          subtitle="Railway サーバープログラム統合管理システム"
+          subtitle="ユニバーサル Node.js サーバープログラム統合管理システム"
           systemStatus={systemStatus}
           onRefresh={handleManualSync}
           onOpenCreateModal={() => handleOpenEditModal(null)}

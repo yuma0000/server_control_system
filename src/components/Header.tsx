@@ -83,7 +83,7 @@ export const Header: React.FC<HeaderProps> = ({
           onClick={onRefresh}
           disabled={isSyncing}
           className="flex items-center space-x-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium border border-slate-700 transition-all active:scale-95 disabled:opacity-50"
-          title="Railwayサーバーと手動同期"
+          title="APIサーバーと手動同期"
         >
           <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin text-indigo-400' : 'text-slate-400'}`} />
           <span className="hidden sm:inline">{isSyncing ? '同期中...' : '手動同期'}</span>

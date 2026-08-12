@@ -9,27 +9,27 @@ import {
   Save, 
   Check, 
   Server, 
-  Activity, 
-  Layers, 
+  Globe,
   ExternalLink,
   ShieldAlert,
   Terminal,
-  RefreshCw
+  RefreshCw,
+  Cpu
 } from 'lucide-react';
-import { RailwayEnvVar } from '../types';
+import { ServerEnvVar } from '../types';
 
-interface RailwayApiViewProps {
-  envVars: RailwayEnvVar[];
-  onSaveEnvVars: (vars: RailwayEnvVar[]) => void;
+interface ServerEnvViewProps {
+  envVars: ServerEnvVar[];
+  onSaveEnvVars: (vars: ServerEnvVar[]) => void;
 }
 
-export const RailwayApiView: React.FC<RailwayApiViewProps> = ({
+export const RailwayApiView: React.FC<ServerEnvViewProps> = ({
   envVars,
   onSaveEnvVars
 }) => {
-  const [varsList, setVarsList] = useState<RailwayEnvVar[]>(envVars);
+  const [varsList, setVarsList] = useState<ServerEnvVar[]>(envVars);
   const [showSecrets, setShowSecrets] = useState<Record<number, boolean>>({});
-  const [railwayToken, setRailwayToken] = useState<string>(() => localStorage.getItem('RAILWAY_API_TOKEN') || '');
+  const [apiToken, setApiToken] = useState<string>(() => localStorage.getItem('SERVER_API_TOKEN') || '');
   const [savedSuccessMsg, setSavedSuccessMsg] = useState<string | null>(null);
 
   const handleAddVar = () => {
@@ -45,15 +45,15 @@ export const RailwayApiView: React.FC<RailwayApiViewProps> = ({
   };
 
   const handleSaveToken = () => {
-    localStorage.setItem('RAILWAY_API_TOKEN', railwayToken);
-    setSavedSuccessMsg('Railway APIトークンをブラウザに保持しました。');
+    localStorage.setItem('SERVER_API_TOKEN', apiToken);
+    setSavedSuccessMsg('APIアクセストークンをブラウザに保存しました。');
     setTimeout(() => setSavedSuccessMsg(null), 3000);
   };
 
   const handleSaveAllVars = () => {
     const validVars = varsList.filter(v => v.key.trim().length > 0);
     onSaveEnvVars(validVars);
-    setSavedSuccessMsg('環境変数をRailwayサーバーに適用・保持しました！');
+    setSavedSuccessMsg('環境変数をバックエンドサーバーに適用・保存しました！');
     setTimeout(() => setSavedSuccessMsg(null), 3000);
   };
 
@@ -64,13 +64,13 @@ export const RailwayApiView: React.FC<RailwayApiViewProps> = ({
         <div className="space-y-1">
           <div className="inline-flex items-center px-2.5 py-1 rounded-full bg-indigo-500/10 text-indigo-400 text-xs font-semibold border border-indigo-500/20">
             <Sliders className="w-3.5 h-3.5 mr-1.5" />
-            Railway API & 環境変数統合コントロール
+            サーバー環境変数 & API 管理
           </div>
           <h3 className="text-xl font-bold text-slate-100">
-            Railway 環境変数 & API 管理
+            環境変数 & プラットフォーム連携設定
           </h3>
           <p className="text-xs text-slate-400 max-w-2xl">
-            Railwayコンテナの環境変数をウェブ画面から指定・確認・更新します。API連携により状態確認も行えます。
+            Render, Vercel, Fly.io, Docker, VPS などのバックエンドサーバーに適用する環境変数を動的に設定・管理します。
           </p>
         </div>
 
@@ -90,7 +90,7 @@ export const RailwayApiView: React.FC<RailwayApiViewProps> = ({
         </div>
       )}
 
-      {/* Railway Token Card */}
+      {/* API Token & Authentication Card */}
       <div className="bg-slate-900/90 rounded-2xl border border-slate-800 p-6 space-y-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-3">
@@ -98,35 +98,25 @@ export const RailwayApiView: React.FC<RailwayApiViewProps> = ({
               <Key className="w-5 h-5" />
             </div>
             <div>
-              <h4 className="font-bold text-slate-100 text-sm">Railway API Personal Token</h4>
-              <p className="text-xs text-slate-400">GraphQL API操作用のトークン設定 (Optional)</p>
+              <h4 className="font-bold text-slate-100 text-sm">サーバー認証用 API アクセストークン</h4>
+              <p className="text-xs text-slate-400">外部 API 連携や保護されたエンドポイント呼び出しで使用するトークン (Optional)</p>
             </div>
           </div>
-
-          <a
-            href="https://railway.app/account/tokens"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center space-x-1"
-          >
-            <span>Railwayでトークンを発行</span>
-            <ExternalLink className="w-3.5 h-3.5" />
-          </a>
         </div>
 
         <div className="flex items-center space-x-3">
           <input
             type="password"
-            placeholder="railway_token_xxxxxxxxxxxx"
-            value={railwayToken}
-            onChange={(e) => setRailwayToken(e.target.value)}
+            placeholder="api_token_xxxxxxxxxxxx"
+            value={apiToken}
+            onChange={(e) => setApiToken(e.target.value)}
             className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-slate-100 font-mono focus:outline-none focus:border-indigo-500"
           />
           <button
             onClick={handleSaveToken}
             className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold shrink-0 transition-all"
           >
-            Token保存
+            トークン保存
           </button>
         </div>
       </div>

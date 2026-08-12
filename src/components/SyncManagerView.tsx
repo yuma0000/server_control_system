@@ -16,11 +16,11 @@ import {
   Check,
   AlertTriangle
 } from 'lucide-react';
-import { Program, RailwayEnvVar, SystemStatus } from '../types';
+import { Program, ServerEnvVar, SystemStatus } from '../types';
 
 interface SyncManagerViewProps {
   programs: Program[];
-  railwayEnvVars: RailwayEnvVar[];
+  railwayEnvVars: ServerEnvVar[];
   systemStatus: SystemStatus | null;
   onSync: () => Promise<void>;
   onExportBackup: () => void;
@@ -58,7 +58,7 @@ export const SyncManagerView: React.FC<SyncManagerViewProps> = ({
 
   const handleManualSync = async () => {
     await onSync();
-    setSyncSuccessMsg('Railway サーバーとの同期が完了しました！データはコンテナに正常保存されました。');
+    setSyncSuccessMsg('API サーバーとの同期が完了しました！データは正常に保存されました。');
     setTimeout(() => setSyncSuccessMsg(null), 4000);
   };
 
@@ -78,10 +78,10 @@ export const SyncManagerView: React.FC<SyncManagerViewProps> = ({
             通信量削減 & サーバー / ローカル分離ポータル
           </div>
           <h3 className="text-xl font-bold text-slate-100">
-            データ同期 & Railway ネットワーク制限対策マネージャー
+            データ同期 & 通信量・サーバー分離マネージャー
           </h3>
           <p className="text-xs text-slate-400 max-w-2xl">
-            Railwayのネットワーク上限回避（サーバー/ローカルサイト分離・圧縮・軽量ポーリング）およびデータ持続化の最適化設定を行えます。
+            クラウドサーバー（Render, Fly.io, Railway 等）と Vercel / ローカルフロントエンドの完全分離、通信量削減（圧縮・軽量ポーリング）およびデータ最適化を行えます。
           </p>
         </div>
 
@@ -102,7 +102,7 @@ export const SyncManagerView: React.FC<SyncManagerViewProps> = ({
         </div>
       )}
 
-      {/* Railway Network Limits & Local Site Separation Section */}
+      {/* Network Limits & Local Site Separation Section */}
       <div className="bg-gradient-to-r from-slate-900 via-indigo-950/40 to-slate-900 border border-indigo-500/30 rounded-2xl p-6 space-y-6 shadow-xl">
         <div className="flex items-start justify-between gap-4">
           <div className="flex items-center space-x-3">
@@ -111,13 +111,13 @@ export const SyncManagerView: React.FC<SyncManagerViewProps> = ({
             </div>
             <div>
               <h4 className="text-base font-bold text-slate-100 flex items-center gap-2">
-                <span>サーバー（Railway API）とローカル（Webサイト）の分離設定</span>
+                <span>サーバー（API サーバー）とローカル / Vercel（Webサイト）の分離設定</span>
                 <span className="px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 text-[10px] border border-indigo-500/30">
-                  Railway 通信量大幅削減
+                  通信量大幅削減
                 </span>
               </h4>
               <p className="text-xs text-slate-400 mt-0.5">
-                Webサイトの画面（HTML/JS/CSS）をローカル環境で動かし、RailwayをバックエンドAPI専用にすることで、Railwayの転送量を100%カットできます。
+                Webサイト画面（HTML/JS/CSS）を Vercel やローカルで動かし、バックエンドを API 専用にすることで転送量を大幅にカットできます。
               </p>
             </div>
           </div>
@@ -129,7 +129,7 @@ export const SyncManagerView: React.FC<SyncManagerViewProps> = ({
             <div className="flex items-center justify-between">
               <label className="text-xs font-bold text-slate-200 flex items-center space-x-2">
                 <Wifi className="w-4 h-4 text-indigo-400" />
-                <span>Railway バックエンド API URL (接続先)</span>
+                <span>バックエンド API サーバー URL (接続先)</span>
               </label>
               <span className="text-[10px] text-slate-500 font-mono">CORS対応済み</span>
             </div>
@@ -139,7 +139,7 @@ export const SyncManagerView: React.FC<SyncManagerViewProps> = ({
                 type="text"
                 value={tempApiUrl}
                 onChange={(e) => setTempApiUrl(e.target.value)}
-                placeholder="例: https://your-railway-app.up.railway.app (空欄 = 同一サーバー)"
+                placeholder="例: https://my-api-server.onrender.com (空欄 = 同一サーバー)"
                 className="flex-1 bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:border-indigo-500 font-mono"
               />
               <button
@@ -158,11 +158,11 @@ export const SyncManagerView: React.FC<SyncManagerViewProps> = ({
             )}
 
             <div className="p-3.5 rounded-lg bg-indigo-950/40 border border-indigo-500/20 text-[11px] text-slate-300 space-y-1.5 leading-relaxed">
-              <p className="font-semibold text-indigo-300">💡 サーバーとローカルサイトを分離する手順:</p>
+              <p className="font-semibold text-indigo-300">💡 サーバーとクライアント（Vercel 等）を分離する手順:</p>
               <ol className="list-decimal list-inside space-y-1 text-slate-400">
-                <li>本ローカルWeb画面またはVercel等の無料静的ホスティングで画面を開きます。</li>
-                <li>上の入力欄にあなたの Railway サーバーのURL（例: <code className="text-indigo-300 font-mono">https://xxx.up.railway.app</code>）を設定します。</li>
-                <li>Railway 側で環境変数 <code className="text-indigo-300 font-mono">SERVE_STATIC=false</code> を設定すると、Railwayは静的ファイルを配信せずAPI専用として動作し、ネットワーク転送量を最小限に抑えます。</li>
+                <li>本 Web 画面を Vercel / Netlify やローカル開発環境で起動します。</li>
+                <li>上の入力欄に、Render や Fly.io、VPS などで起動した API サーバーの URL（例: <code className="text-indigo-300 font-mono">https://my-api.onrender.com</code>）を設定します。</li>
+                <li>サーバー側で環境変数 <code className="text-indigo-300 font-mono">SERVE_STATIC=false</code> を指定すると、API 専用モードとして軽量動作します。</li>
               </ol>
             </div>
           </div>
@@ -177,7 +177,7 @@ export const SyncManagerView: React.FC<SyncManagerViewProps> = ({
 
               {/* Interval Buttons */}
               <div className="space-y-2">
-                <p className="text-[11px] text-slate-400">更新間隔 (Railwayへのリクエスト頻度):</p>
+                <p className="text-[11px] text-slate-400">更新間隔 (API サーバーへのリクエスト頻度):</p>
                 <div className="grid grid-cols-3 gap-2">
                   {[
                     { label: '3秒 (標準)', val: 3 },
@@ -322,7 +322,7 @@ export const SyncManagerView: React.FC<SyncManagerViewProps> = ({
           </div>
         </div>
 
-        {/* Railway Container Disk Status */}
+        {/* Server Disk Status */}
         <div className="bg-slate-900/90 rounded-2xl border border-slate-800 p-6 space-y-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-3">
@@ -330,12 +330,12 @@ export const SyncManagerView: React.FC<SyncManagerViewProps> = ({
                 <Server className="w-5 h-5" />
               </div>
               <div>
-                <h4 className="font-bold text-slate-100 text-sm">Railway サーバーディスク</h4>
+                <h4 className="font-bold text-slate-100 text-sm">バックエンドサーバーディスク</h4>
                 <p className="text-xs text-slate-400">/data/server_state.json</p>
               </div>
             </div>
             <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30">
-              Railway Server
+              API Server
             </span>
           </div>
 
@@ -351,7 +351,7 @@ export const SyncManagerView: React.FC<SyncManagerViewProps> = ({
               <span className="text-emerald-400 font-semibold">有効 (Automatic Boot Sync)</span>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-slate-400">コンテナ稼働時間:</span>
+              <span className="text-slate-400">サーバー稼働時間:</span>
               <span className="font-mono text-slate-300">
                 {Math.floor((systemStatus?.serverUptimeSec || 0) / 60)} 分
               </span>

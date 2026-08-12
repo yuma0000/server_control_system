@@ -162,10 +162,10 @@ docker compose up -d --build
               <span>システム公式仕様書 v2.0 (マルチファイル対応)</span>
             </div>
             <h2 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
-              Railway サーバー管理システム 技術仕様書
+              ユニバーサル Node.js サーバー管理システム 技術仕様書
             </h2>
             <p className="text-slate-400 text-sm mt-2 max-w-2xl leading-relaxed">
-              プロセス分離型ストレージ、マルチコードファイル管理、ローカルファイルインポート、ファイル名変更、コード折りたたみ表示などの最新仕様を含む技術ドキュメントです。
+              プロセス分離型ストレージ、マルチコードファイル管理、プロセス残留対策、Render / Vercel / Railway / Docker 完全対応の分離構成を含む最新技術ドキュメントです。
             </p>
           </div>
 
