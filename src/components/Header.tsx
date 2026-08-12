@@ -103,7 +103,12 @@ export const Header: React.FC<HeaderProps> = ({
             className="flex items-center space-x-1.5 bg-slate-800/80 hover:bg-slate-800 px-3 py-1.5 rounded-lg border border-slate-700/60 text-xs transition-colors"
             title="クリックしてRenderサーバー接続設定を開く"
           >
-            {systemStatus?.connected ? (
+            {systemStatus === null ? (
+              <>
+                <RefreshCw className="w-3.5 h-3.5 text-indigo-400 animate-spin shrink-0" />
+                <span className="text-slate-300 font-medium hidden md:inline">API サーバー確認中...</span>
+              </>
+            ) : systemStatus?.connected ? (
               <>
                 <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
                 <span className="text-slate-200 font-medium hidden md:inline">API サーバー 接続完了</span>
@@ -111,7 +116,7 @@ export const Header: React.FC<HeaderProps> = ({
             ) : (
               <>
                 <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                <span className="text-amber-400 font-medium">再接続中 (Render)</span>
+                <span className="text-amber-400 font-medium">API サーバー 未接続</span>
               </>
             )}
             <Settings className="w-3.5 h-3.5 text-slate-400 ml-1" />
@@ -152,10 +157,10 @@ export const Header: React.FC<HeaderProps> = ({
             <div className="space-y-1">
               <h3 className="text-base font-bold text-slate-100 flex items-center space-x-2">
                 <Globe className="w-5 h-5 text-indigo-400" />
-                <span>Render / API サーバー接続設定</span>
+                <span>API サーバー接続設定</span>
               </h3>
               <p className="text-xs text-slate-400">
-                Render や外部ホスト上の Backend API URL を指定します。同一次元（同一サーバー）の場合は空欄で問題ありません。
+                本アプリは Node.js バックエンドサーバー（Express）と連携してプログラムの実行・管理を行います。同一環境で動作している場合は空欄で接続できます。
               </p>
             </div>
 
