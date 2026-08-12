@@ -15,14 +15,27 @@ app.use((req, res, next) => {
   const origin = req.headers.origin || '*';
   res.setHeader('Access-Control-Allow-Origin', origin);
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, x-custom-api-url');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
   if (req.method === 'OPTIONS') {
-    return res.status(204).end();
+    return res.status(200).end();
   }
   next();
 });
 
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+// JSON Parsing Error Guard
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (err) {
+    console.error('[Express Middleware Error]', err);
+    return res.status(400).json({
+      error: `データ解析エラー: ${err.message || '無効なリクエストデータです。'}`
+    });
+  }
+  next();
+});
 
 // Directories
 const DATA_DIR = path.join(process.cwd(), 'data');
@@ -389,20 +402,23 @@ app.post('/api/env/vars', (req, res) => {
 
 // Backup & Restore Endpoints
 app.get(['/api/backup', '/api/backup/export'], (req, res) => {
-  const backupData = {
-    version: '3.1.0',
-    exportedAt: new Date().toISOString(),
-    programs: programs.map(p => ({
-      ...p,
-      status: 'IDLE',
-      runningPid: undefined
-    })),
-    logs: logs.slice(0, 300),
-    envVars
-  };
-  res.setHeader('Content-Type', 'application/json');
-  res.setHeader('Content-Disposition', `attachment; filename=node_server_backup_${new Date().toISOString().slice(0, 10)}.json`);
-  res.json(backupData);
+  try {
+    const backupData = {
+      version: '3.1.0',
+      exportedAt: new Date().toISOString(),
+      programs: programs.map(p => ({
+        ...p,
+        status: 'IDLE',
+        runningPid: undefined
+      })),
+      logs: logs.slice(0, 300),
+      envVars
+    };
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.status(200).json(backupData);
+  } catch (err: any) {
+    res.status(500).json({ error: `バックアップ出力エラー: ${err.message}` });
+  }
 });
 
 app.post(['/api/backup/restore', '/api/backup/import'], (req, res) => {

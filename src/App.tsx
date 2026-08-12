@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Program, LogEntry, ServerEnvVar, SystemStatus } from './types';
+import { safeFetch } from './utils/api';
 import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
 import { DashboardView } from './components/DashboardView';
@@ -23,20 +24,6 @@ export const App: React.FC = () => {
   // Modal State
   const [modalOpen, setModalOpen] = useState<boolean>(false);
   const [editingProgram, setEditingProgram] = useState<Program | null>(null);
-
-  // Helper fetch with absolute or relative paths
-  const safeFetch = async (endpoint: string, options?: RequestInit) => {
-    const res = await fetch(endpoint, {
-      ...options,
-      headers: {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-        ...(options?.headers || {})
-      }
-    });
-    if (!res.ok) throw new Error(`HTTP Error ${res.status}`);
-    return res.json();
-  };
 
   // Sync state from server
   const fetchServerState = useCallback(async () => {

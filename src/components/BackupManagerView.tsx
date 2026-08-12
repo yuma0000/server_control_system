@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { Download, Upload, DatabaseBackup, CheckCircle2, AlertTriangle, FileJson, RefreshCw, ShieldCheck } from 'lucide-react';
 import { Program, LogEntry, ServerEnvVar } from '../types';
+import { buildApiUrl, parseJsonResponse } from '../utils/api';
 
 interface BackupManagerViewProps {
   programs: Program[];
@@ -25,9 +26,15 @@ export const BackupManagerView: React.FC<BackupManagerViewProps> = ({
     setIsExporting(true);
     setStatusMsg(null);
     try {
-      const res = await fetch('/api/backup/export');
-      if (!res.ok) throw new Error('バックアップデータの取得に失敗しました');
-      const data = await res.json();
+      const endpoint = buildApiUrl('/api/backup/export');
+      const res = await fetch(endpoint, {
+        headers: { 'Accept': 'application/json' }
+      });
+
+      const data = await parseJsonResponse(res);
+      if (!res.ok) {
+        throw new Error(data.error || `HTTP Error ${res.status}`);
+      }
 
       const jsonStr = JSON.stringify(data, null, 2);
       const blob = new Blob([jsonStr], { type: 'application/json' });
@@ -59,20 +66,33 @@ export const BackupManagerView: React.FC<BackupManagerViewProps> = ({
 
     try {
       const text = await file.text();
-      const parsed = JSON.parse(text);
+      let parsed: any;
+      try {
+        parsed = JSON.parse(text);
+      } catch (jsonErr: any) {
+        throw new Error(`選択されたファイルは有効なJSON形式ではありません (${jsonErr.message})`);
+      }
 
-      const res = await fetch('/api/backup/restore', {
+      if (!parsed || typeof parsed !== 'object') {
+        throw new Error('バックアップJSONデータの構造が無効です。');
+      }
+
+      const endpoint = buildApiUrl('/api/backup/restore');
+      const res = await fetch(endpoint, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
         body: JSON.stringify(parsed)
       });
 
+      const result = await parseJsonResponse(res);
+
       if (!res.ok) {
-        const errJson = await res.json().catch(() => ({}));
-        throw new Error(errJson.error || '復元処理に失敗しました');
+        throw new Error(result.error || `復元処理に失敗しました (HTTP ${res.status})`);
       }
 
-      const result = await res.json();
       setStatusMsg({
         type: 'success',
         text: `バックアップの復元に成功しました (${result.programCount || 0}件のプログラムを復元)`
