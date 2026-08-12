@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import compression from 'compression';
-import { spawn, ChildProcess } from 'child_process';
+import { spawn, execSync, ChildProcess } from 'child_process';
 import { createServer as createViteServer } from 'vite';
 import { Program, LogEntry, ServerEnvVar, SystemStatus } from './src/types';
 
@@ -143,6 +143,37 @@ function addLog(programId: string, programName: string, level: LogEntry['level']
   if (logs.length > 300) logs = logs.slice(0, 300);
 }
 
+// Resolve shell command (bash with fallback to sh)
+function resolveShellCmd(): string {
+  try {
+    if (fs.existsSync('/bin/bash') || fs.existsSync('/usr/bin/bash') || fs.existsSync('/usr/local/bin/bash')) {
+      return 'bash';
+    }
+    execSync('command -v bash', { stdio: 'ignore' });
+    return 'bash';
+  } catch (_) {
+    return 'sh';
+  }
+}
+
+// Resolve python command
+function resolvePythonCmd(): string {
+  try {
+    if (fs.existsSync('/usr/bin/python3') || fs.existsSync('/usr/local/bin/python3')) {
+      return 'python3';
+    }
+    execSync('command -v python3', { stdio: 'ignore' });
+    return 'python3';
+  } catch (_) {
+    try {
+      execSync('command -v python', { stdio: 'ignore' });
+      return 'python';
+    } catch (_) {
+      return 'python3';
+    }
+  }
+}
+
 // Program execution runner
 async function executeProgram(id: string, source: 'manual' | 'scheduled' = 'manual'): Promise<boolean> {
   const prog = programs.find(p => p.id === id);
@@ -170,7 +201,18 @@ async function executeProgram(id: string, source: 'manual' | 'scheduled' = 'manu
     const filePath = path.join(progDir, f.filename);
     const subDir = path.dirname(filePath);
     if (!fs.existsSync(subDir)) fs.mkdirSync(subDir, { recursive: true });
-    fs.writeFileSync(filePath, f.content || '', 'utf-8');
+
+    let content = f.content || '';
+    if (prog.language === 'bash' || f.filename.endsWith('.sh') || f.filename.endsWith('.bash')) {
+      content = content.replace(/\r\n/g, '\n');
+    }
+    fs.writeFileSync(filePath, content, 'utf-8');
+
+    if (prog.language === 'bash' || f.filename.endsWith('.sh')) {
+      try {
+        fs.chmodSync(filePath, '755');
+      } catch (_) {}
+    }
   }
 
   addLog(prog.id, prog.name, 'INFO', `[実行開始] 登録ファイル数: ${prog.files.length} (エントリー: ${entryFile?.filename || 'index.js'})`);
@@ -180,9 +222,9 @@ async function executeProgram(id: string, source: 'manual' | 'scheduled' = 'manu
   let args = [entryFile?.filename || 'index.js'];
 
   if (prog.language === 'python') {
-    cmd = 'python3';
+    cmd = resolvePythonCmd();
   } else if (prog.language === 'bash') {
-    cmd = 'bash';
+    cmd = resolveShellCmd();
   }
 
   try {
@@ -226,11 +268,16 @@ async function executeProgram(id: string, source: 'manual' | 'scheduled' = 'manu
       saveState();
     });
 
-    child.on('error', (err) => {
+    child.on('error', (err: any) => {
       activeProcesses.delete(id);
       prog.status = 'FAILED';
       prog.runningPid = undefined;
-      addLog(prog.id, prog.name, 'ERROR', `[エラー] 起動エラー: ${err.message}`);
+
+      let msg = `[エラー] 起動エラー (${cmd}): ${err.message}`;
+      if (err.code === 'ENOENT') {
+        msg += ` (コマンド「${cmd}」が実行環境で見つかりません)`;
+      }
+      addLog(prog.id, prog.name, 'ERROR', msg);
       saveState();
     });
 
