@@ -1,4 +1,4 @@
-export type ProgramLanguage = 'nodejs' | 'python' | 'bash' | 'php' | 'ruby';
+export type ProgramLanguage = 'nodejs' | 'python' | 'bash';
 
 export type ProgramStatus = 'IDLE' | 'RUNNING' | 'STOPPED' | 'SUCCESS' | 'FAILED';
 
@@ -11,8 +11,8 @@ export interface CodeFile {
 
 export interface ScheduleConfig {
   enabled: boolean;
-  timeStr: string; // "HH:MM" e.g., "14:30"
-  daysOfWeek: number[]; // 0 = Sun, 1 = Mon, ..., 6 = Sat (empty array = every day)
+  timeStr: string; // "HH:MM" e.g. "14:30"
+  daysOfWeek?: number[]; // 0 = Sun, 1 = Mon ...
   skipIfRunning: boolean; // default true
 }
 
@@ -22,10 +22,8 @@ export interface Program {
   description: string;
   language: ProgramLanguage;
   files: CodeFile[];
-  code?: string; // Legacy fallback
   status: ProgramStatus;
   schedule: ScheduleConfig;
-  timeoutSec?: number; // Optional execution timeout in seconds (0 or undefined = unlimited)
   envVars: Record<string, string>;
   createdAt: string;
   updatedAt: string;
@@ -53,43 +51,23 @@ export interface ServerEnvVar {
   isSecret?: boolean;
 }
 
-// Backward compatibility alias
-export type RailwayEnvVar = ServerEnvVar;
-
-export interface ProcessFileEntry {
-  filename: string;
-  relativePath: string;
-  sizeBytes: number;
-  updatedAt: string;
-  isEntry?: boolean;
-  content?: string;
-  isDirectory?: boolean;
-}
-
 export interface SystemStatus {
   connected: boolean;
   serverUptimeSec: number;
   memoryUsageMb: number;
-  heapUsedMb?: number;
-  heapTotalMb?: number;
-  rssMb?: number;
   cpuPercent: number;
   runningProgramsCount: number;
   totalProgramsCount: number;
   scheduledProgramsCount: number;
   lastBootTime: string;
   lastSyncedAt: string;
-  platformName?: string;
-  serverHost?: string;
-  railwayProjectName?: string;
-  railwayServiceName?: string;
+  platformName: string;
 }
 
-export interface AppStatePayload {
+export interface BackupPayload {
+  version: string;
+  exportedAt: string;
   programs: Program[];
-  logs: LogEntry[];
-  serverEnvVars: ServerEnvVar[];
-  railwayEnvVars?: ServerEnvVar[]; // Backward compatibility
-  lastSyncedAt: string;
-  clientVersion: string;
+  logs?: LogEntry[];
+  envVars?: ServerEnvVar[];
 }

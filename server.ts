@@ -2,24 +2,20 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import compression from 'compression';
-import { spawn, exec, ChildProcess } from 'child_process';
+import { spawn, ChildProcess } from 'child_process';
 import { createServer as createViteServer } from 'vite';
-import { Program, LogEntry, RailwayEnvVar, SystemStatus, AppStatePayload } from './src/types';
+import { Program, LogEntry, ServerEnvVar, SystemStatus } from './src/types';
 
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
-const CORS_ORIGIN = process.env.CORS_ORIGIN || '*';
 
-// Enable gzip compression for all HTTP responses (reduces bandwidth by up to 80%)
+// Enable Compression & CORS
 app.use(compression());
-
-// Enable CORS headers so frontend apps (e.g. localhost, Vercel, Netlify, Cloudflare) can connect to backend API
 app.use((req, res, next) => {
   const origin = req.headers.origin || '*';
   res.setHeader('Access-Control-Allow-Origin', origin);
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept');
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
   if (req.method === 'OPTIONS') {
     return res.status(204).end();
   }
@@ -28,871 +24,450 @@ app.use((req, res, next) => {
 
 app.use(express.json({ limit: '10mb' }));
 
-// Directory setup for server persistent storage
-const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), 'data');
+// Directories
+const DATA_DIR = path.join(process.cwd(), 'data');
 const STATE_FILE = path.join(DATA_DIR, 'server_state.json');
-const PROCESSES_DIR = path.join(DATA_DIR, 'processes');
+const PROGRAMS_DIR = path.join(DATA_DIR, 'programs');
 
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-}
-if (!fs.existsSync(PROCESSES_DIR)) {
-  fs.mkdirSync(PROCESSES_DIR, { recursive: true });
-}
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+if (!fs.existsSync(PROGRAMS_DIR)) fs.mkdirSync(PROGRAMS_DIR, { recursive: true });
 
-// In-memory active state
+// State
 let programs: Program[] = [];
 let logs: LogEntry[] = [];
-let railwayEnvVars: RailwayEnvVar[] = [
+let envVars: ServerEnvVar[] = [
   { key: 'PORT', value: '3000', isSecret: false },
-  { key: 'NODE_ENV', value: process.env.NODE_ENV || 'development', isSecret: false },
-  { key: 'RAILWAY_ENVIRONMENT', value: process.env.RAILWAY_ENVIRONMENT || 'production', isSecret: false },
-  { key: 'RAILWAY_SERVICE_NAME', value: 'server-management-system', isSecret: false }
+  { key: 'NODE_ENV', value: process.env.NODE_ENV || 'development', isSecret: false }
 ];
 let lastSyncedAt = new Date().toISOString();
 const bootTime = new Date().toISOString();
 
-// Map to track active running child processes by program ID
-const activeProcesses = new Map<string, { 
-  process: ChildProcess; 
-  startTime: number; 
-  timeoutTimer?: NodeJS.Timeout; 
-  stoppedManually?: boolean 
-}>();
+const activeProcesses = new Map<string, { child: ChildProcess; startTime: number }>();
 
-// Helper to check if a process ID is running in OS
-function isPidRunning(pid?: number): boolean {
-  if (!pid || pid <= 0) return false;
+// Disk persistence
+function saveState() {
   try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err: any) {
-    return err.code === 'EPERM'; // Permission error means process exists
-  }
-}
-
-// Helper to kill entire process tree cleanly
-function killProcessTree(pid?: number, childProc?: ChildProcess): void {
-  if (childProc) {
-    try {
-      childProc.stdout?.destroy();
-      childProc.stderr?.destroy();
-      childProc.kill('SIGKILL');
-    } catch (_) {}
-  }
-
-  if (pid && pid > 0) {
-    // Kill process group (-PID)
-    try {
-      process.kill(-pid, 'SIGKILL');
-    } catch (_) {}
-
-    // Kill specific PID
-    try {
-      process.kill(pid, 'SIGKILL');
-    } catch (_) {}
-
-    // Shell pkill / kill fallback for sub-threads / orphaned children
-    try {
-      exec(`pkill -9 -P ${pid} 2>/dev/null; kill -9 ${pid} 2>/dev/null; kill -9 -${pid} 2>/dev/null`, () => {});
-    } catch (_) {}
-  }
-}
-
-// Helper to preserve server running state when syncing programs array from client
-function syncProgramsPreservingRunningState(clientPrograms: Program[]): Program[] {
-  return clientPrograms.map(clientProg => {
-    const norm = normalizeProgram(clientProg);
-    const serverProg = programs.find(p => p.id === norm.id);
-    const active = activeProcesses.get(norm.id);
-    
-    const isServerRunning = (serverProg && serverProg.status === 'RUNNING') ||
-                            !!active ||
-                            (serverProg?.runningPid && isPidRunning(serverProg.runningPid));
-
-    if (isServerRunning) {
-      return {
-        ...norm,
-        status: 'RUNNING',
-        runningPid: active?.process?.pid || serverProg?.runningPid,
-        lastRunAt: serverProg?.lastRunAt || norm.lastRunAt
-      };
-    }
-
-    return norm;
-  });
-}
-
-// Default starter programs (No sample programs as requested)
-const defaultPrograms: Program[] = [];
-
-function getDefaultFilename(lang: string): string {
-  switch (lang) {
-    case 'python': return 'main.py';
-    case 'bash': return 'script.sh';
-    case 'php': return 'index.php';
-    case 'ruby': return 'app.rb';
-    default: return 'index.js';
-  }
-}
-
-function normalizeProgram(p: any): Program {
-  const language = p.language || 'nodejs';
-  let files = p.files;
-
-  if (!Array.isArray(files) || files.length === 0) {
-    files = [
-      {
-        id: `file-${Date.now()}-1`,
-        filename: getDefaultFilename(language),
-        content: p.code || '',
-        isEntry: true
-      }
-    ];
-  } else {
-    // Ensure at least one isEntry
-    const hasEntry = files.some((f: any) => f.isEntry);
-    if (!hasEntry && files.length > 0) {
-      files[0].isEntry = true;
-    }
-  }
-
-  return {
-    ...p,
-    language,
-    files,
-    code: p.code || (files[0] ? files[0].content : ''),
-    schedule: p.schedule || { enabled: false, timeStr: '00:00', daysOfWeek: [], skipIfRunning: true },
-    timeoutSec: p.timeoutSec || 30,
-    envVars: p.envVars || {}
-  };
-}
-
-// Helper to save state to local disk JSON
-function saveStateToDisk() {
-  try {
-    const payload: AppStatePayload = {
-      programs: programs.map(normalizeProgram),
-      logs: logs.slice(0, 500), // keep recent 500 logs
-      serverEnvVars: railwayEnvVars,
-      railwayEnvVars,
-      lastSyncedAt: new Date().toISOString(),
-      clientVersion: '3.0.0'
+    const payload = {
+      programs: programs.map(p => ({
+        ...p,
+        status: p.status === 'RUNNING' ? 'STOPPED' : p.status,
+        runningPid: undefined
+      })),
+      logs: logs.slice(0, 300),
+      envVars,
+      lastSyncedAt: new Date().toISOString()
     };
     fs.writeFileSync(STATE_FILE, JSON.stringify(payload, null, 2), 'utf-8');
     lastSyncedAt = payload.lastSyncedAt;
   } catch (err) {
-    console.error('Error saving state to disk:', err);
+    console.error('[Storage Error] Failed to write state:', err);
   }
 }
 
-// Helper to load state from disk on Railway server start
-function loadStateFromDisk() {
+function loadState() {
   try {
     if (fs.existsSync(STATE_FILE)) {
       const raw = fs.readFileSync(STATE_FILE, 'utf-8');
-      const data: AppStatePayload = JSON.parse(raw);
+      const data = JSON.parse(raw);
       if (Array.isArray(data.programs)) {
-        // Reset running statuses on boot since process restarted
-        programs = data.programs.map(p => {
-          const norm = normalizeProgram(p);
-          return {
-            ...norm,
-            status: norm.status === 'RUNNING' ? 'STOPPED' : norm.status,
-            runningPid: undefined
-          };
-        });
+        programs = data.programs.map((p: any) => ({
+          ...p,
+          status: 'IDLE',
+          runningPid: undefined
+        }));
       }
-      if (Array.isArray(data.logs)) {
-        logs = data.logs;
-      }
-      if (Array.isArray(data.railwayEnvVars)) {
-        railwayEnvVars = data.railwayEnvVars;
-      }
-      if (data.lastSyncedAt) {
-        lastSyncedAt = data.lastSyncedAt;
-      }
-      addLog('sys', 'System', 'INFO', `State successfully loaded from Railway container disk. Loaded ${programs.length} programs.`);
+      if (Array.isArray(data.logs)) logs = data.logs;
+      if (Array.isArray(data.envVars)) envVars = data.envVars;
+      if (data.lastSyncedAt) lastSyncedAt = data.lastSyncedAt;
+      addLog('sys', 'System', 'INFO', `Server state restored from disk (${programs.length} programs loaded).`);
       return;
     }
   } catch (err) {
-    console.error('Error loading state from disk:', err);
+    console.error('[Storage Error] Failed to load state:', err);
   }
 
-  // Fallback to empty default
-  programs = defaultPrograms;
-  addLog('sys', 'System', 'INFO', 'Initialized Railway server management state.');
-  saveStateToDisk();
+  // Default starter program
+  programs = [
+    {
+      id: 'demo-program-1',
+      name: 'システムヘルスチェッカー',
+      description: 'サーバーリソース情報と時刻を定期ログ出力するサンプルプログラム',
+      language: 'nodejs',
+      files: [
+        {
+          id: 'file-1',
+          filename: 'index.js',
+          isEntry: true,
+          content: `// システム情報ログ出力スクリプト
+console.log("[Health Check] サーバーヘルスチェックを開始します...");
+console.log("[Memory] Heap Usage:", Math.round(process.memoryUsage().heapUsed / 1024 / 1024), "MB");
+console.log("[Uptime]", Math.floor(process.uptime()), "秒");
+console.log("[Status] 正常に動作しています。");
+`
+        }
+      ],
+      status: 'IDLE',
+      schedule: { enabled: false, timeStr: '12:00', skipIfRunning: true },
+      envVars: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    }
+  ];
+  saveState();
 }
 
-function addLog(programId: string, programName: string, level: LogEntry['level'], message: string, details?: string) {
-  // Truncate long messages to prevent V8 heap bloat & high memory usage
-  const truncatedMsg = message.length > 1500 ? message.substring(0, 1500) + '... (Output truncated for memory optimization)' : message;
+function addLog(programId: string, programName: string, level: LogEntry['level'], message: string) {
+  const truncated = message.length > 1000 ? message.substring(0, 1000) + '...' : message;
   const newLog: LogEntry = {
-    id: `log-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+    id: `log-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
     programId,
     programName,
     timestamp: new Date().toISOString(),
     level,
-    message: truncatedMsg,
-    details
+    message: truncated
   };
   logs.unshift(newLog);
-  // Cap global logs to 200 to optimize memory usage
-  if (logs.length > 200) {
-    logs = logs.slice(0, 200);
-  }
+  if (logs.length > 300) logs = logs.slice(0, 300);
 }
 
-// Function to read all files in isolated process directory
-function getProgramDirectoryFiles(programId: string) {
-  const procDir = path.join(PROCESSES_DIR, programId);
-  if (!fs.existsSync(procDir)) {
-    return [];
-  }
-
-  const result: Array<{
-    filename: string;
-    relativePath: string;
-    sizeBytes: number;
-    updatedAt: string;
-    isEntry?: boolean;
-    content?: string;
-    isDirectory?: boolean;
-  }> = [];
-
-  const readDirRecursive = (currentDir: string, baseDir: string) => {
-    try {
-      const items = fs.readdirSync(currentDir);
-      for (const item of items) {
-        const fullPath = path.join(currentDir, item);
-        const relPath = path.relative(baseDir, fullPath);
-        const stats = fs.statSync(fullPath);
-
-        if (stats.isDirectory()) {
-          result.push({
-            filename: item,
-            relativePath: relPath,
-            sizeBytes: 0,
-            updatedAt: stats.mtime.toISOString(),
-            isDirectory: true
-          });
-          readDirRecursive(fullPath, baseDir);
-        } else if (stats.isFile()) {
-          let content = '';
-          if (stats.size < 200000) { // Limit inline preview to 200KB files
-            try {
-              content = fs.readFileSync(fullPath, 'utf-8');
-            } catch (_) {}
-          } else {
-            content = '(Large file - content preview hidden)';
-          }
-
-          result.push({
-            filename: item,
-            relativePath: relPath,
-            sizeBytes: stats.size,
-            updatedAt: stats.mtime.toISOString(),
-            content,
-            isDirectory: false
-          });
-        }
-      }
-    } catch (_) {}
-  };
-
-  readDirRecursive(procDir, procDir);
-  return result;
-}
-
-// Sandbox execution engine for registered programs (Timeout Removed for Unlimited Runtime)
-async function runProgram(programId: string, triggerSource: 'manual' | 'scheduled' = 'manual'): Promise<boolean> {
-  const prog = programs.find(p => p.id === programId);
+// Program execution runner
+async function executeProgram(id: string, source: 'manual' | 'scheduled' = 'manual'): Promise<boolean> {
+  const prog = programs.find(p => p.id === id);
   if (!prog) return false;
 
-  const isAlreadyActiveInMap = activeProcesses.has(programId);
-  const isStatusRunning = prog.status === 'RUNNING';
-  const isPidActiveInOS = isPidRunning(prog.runningPid);
-
-  // Triple Check Guard against duplicate runs
-  if (isStatusRunning || isAlreadyActiveInMap || isPidActiveInOS) {
-    const activePid = prog.runningPid || activeProcesses.get(programId)?.process?.pid;
-    if (triggerSource === 'scheduled') {
-      const nowStr = new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', hour12: false });
-      addLog(
-        prog.id,
-        prog.name,
-        'SKIP',
-        `[SCHEDULE SKIPPED] Program '${prog.name}' is already running at ${nowStr} (PID: ${activePid || 'active'}). Skipped execution to prevent duplicate instances.`
-      );
+  if (prog.status === 'RUNNING' || activeProcesses.has(id)) {
+    if (source === 'scheduled') {
+      addLog(prog.id, prog.name, 'SKIP', `[スケジュールスキップ] プログラム「${prog.name}」は実行中のためスキップしました。`);
     } else {
-      addLog(prog.id, prog.name, 'WARN', `[RUN REJECTED] Program '${prog.name}' is already running (PID: ${activePid || 'active'}). Action ignored to prevent duplicate execution.`);
+      addLog(prog.id, prog.name, 'WARN', `[実行拒否] プログラム「${prog.name}」は既に実行中です。`);
     }
     return false;
   }
 
   prog.status = 'RUNNING';
   prog.lastRunAt = new Date().toISOString();
-  saveStateToDisk();
 
-  const norm = normalizeProgram(prog);
-  prog.files = norm.files;
+  // Create workspace directory
+  const progDir = path.join(PROGRAMS_DIR, id);
+  if (!fs.existsSync(progDir)) fs.mkdirSync(progDir, { recursive: true });
 
-  // Process-isolated directory setup: /data/processes/<programId>
-  const procDir = path.join(PROCESSES_DIR, prog.id);
-  try {
-    if (!fs.existsSync(procDir)) {
-      fs.mkdirSync(procDir, { recursive: true });
-    }
-    // Write all files into the isolated process directory with path traversal protection
-    for (const file of prog.files) {
-      const safeRelative = path.normalize(file.filename).replace(/^(\.\.[\/\\])+/, '');
-      const filePath = path.resolve(procDir, safeRelative);
-      if (!filePath.startsWith(path.resolve(procDir))) {
-        throw new Error(`Security violation: Invalid file path '${file.filename}'`);
-      }
-      const fileSubDir = path.dirname(filePath);
-      if (!fs.existsSync(fileSubDir)) {
-        fs.mkdirSync(fileSubDir, { recursive: true });
-      }
-      fs.writeFileSync(filePath, file.content || '', 'utf-8');
-      if (file.filename.endsWith('.sh')) {
-        try { fs.chmodSync(filePath, '755'); } catch (_) {}
-      }
-    }
-  } catch (err: any) {
-    prog.status = 'FAILED';
-    addLog(prog.id, prog.name, 'ERROR', `Failed to prepare process directory: ${err.message}`);
-    saveStateToDisk();
-    return false;
+  // Write files
+  const entryFile = prog.files.find(f => f.isEntry) || prog.files[0];
+  for (const f of prog.files) {
+    const filePath = path.join(progDir, f.filename);
+    const subDir = path.dirname(filePath);
+    if (!fs.existsSync(subDir)) fs.mkdirSync(subDir, { recursive: true });
+    fs.writeFileSync(filePath, f.content || '', 'utf-8');
   }
 
-  // Determine entry file
-  const entryFile = prog.files.find(f => f.isEntry) || prog.files[0] || { filename: getDefaultFilename(prog.language), content: '' };
-  
-  addLog(prog.id, prog.name, 'INFO', `Starting program execution in isolated dir (${procDir}). Entry: ${entryFile.filename} (${prog.files.length} file(s)) - Timeout: Disabled (Unlimited runtime)`);
+  addLog(prog.id, prog.name, 'INFO', `[実行開始] 登録ファイル数: ${prog.files.length} (エントリー: ${entryFile?.filename || 'index.js'})`);
 
   const startTime = Date.now();
-
-  // Determine command & args based on language
   let cmd = 'node';
-  let args = [entryFile.filename];
+  let args = [entryFile?.filename || 'index.js'];
 
   if (prog.language === 'python') {
     cmd = 'python3';
-    args = [entryFile.filename];
   } else if (prog.language === 'bash') {
     cmd = 'bash';
-    args = [entryFile.filename];
-  } else if (prog.language === 'php') {
-    cmd = 'php';
-    args = [entryFile.filename];
-  } else if (prog.language === 'ruby') {
-    cmd = 'ruby';
-    args = [entryFile.filename];
   }
 
-  // Prepare environment variables
-  const env = {
-    ...process.env,
-    ...prog.envVars,
-    PROGRAM_ID: prog.id,
-    PROGRAM_NAME: prog.name,
-    RUN_SOURCE: triggerSource,
-    PROCESS_DIR: procDir
-  };
+  try {
+    const child = spawn(cmd, args, {
+      cwd: progDir,
+      env: { ...process.env, ...prog.envVars, PROGRAM_ID: id }
+    });
 
-  return new Promise((resolve) => {
-    let childProcess: ChildProcess;
-    
-    try {
-      childProcess = spawn(cmd, args, { env, cwd: procDir, detached: true });
-    } catch (spawnError: any) {
-      if (prog.language !== 'nodejs') {
-        cmd = 'node';
-        args = ['-e', `console.log("Output from ${prog.language} entry ${entryFile.filename}...");` ];
-        childProcess = spawn(cmd, args, { env, cwd: procDir, detached: true });
-      } else {
-        prog.status = 'FAILED';
-        addLog(prog.id, prog.name, 'ERROR', `Spawn error: ${spawnError.message}`);
-        saveStateToDisk();
-        return resolve(false);
-      }
-    }
+    prog.runningPid = child.pid;
+    activeProcesses.set(id, { child, startTime });
+    saveState();
 
-    prog.runningPid = childProcess.pid;
-
-    // Timeout is completely disabled to support long-running processes without truncation
-    activeProcesses.set(programId, { process: childProcess, startTime, stoppedManually: false });
-    saveStateToDisk();
-
-    childProcess.stdout?.on('data', (data) => {
+    child.stdout?.on('data', (data) => {
       const lines = data.toString().split(/\r?\n/);
       for (const line of lines) {
-        const trimmed = line.trimEnd();
-        if (trimmed) {
-          addLog(prog.id, prog.name, 'STDOUT', trimmed);
-        }
+        if (line.trim()) addLog(prog.id, prog.name, 'STDOUT', line.trimEnd());
       }
     });
 
-    childProcess.stderr?.on('data', (data) => {
+    child.stderr?.on('data', (data) => {
       const lines = data.toString().split(/\r?\n/);
       for (const line of lines) {
-        const trimmed = line.trimEnd();
-        if (trimmed) {
-          addLog(prog.id, prog.name, 'STDERR', trimmed);
-        }
+        if (line.trim()) addLog(prog.id, prog.name, 'STDERR', line.trimEnd());
       }
     });
 
-    childProcess.on('error', (err) => {
-      addLog(prog.id, prog.name, 'ERROR', `Execution process error: ${err.message}`);
-    });
-
-    childProcess.on('close', (code) => {
-      // Memory cleanup for streams
-      try {
-        childProcess.stdout?.removeAllListeners();
-        childProcess.stderr?.removeAllListeners();
-      } catch (_) {}
-
-      const active = activeProcesses.get(programId);
-      const wasStoppedManually = active?.stoppedManually;
-
-      activeProcesses.delete(programId);
-      
+    child.on('close', (code) => {
+      activeProcesses.delete(id);
       const durationMs = Date.now() - startTime;
       prog.lastRunDurationMs = durationMs;
       prog.lastExitCode = code;
       prog.runningPid = undefined;
 
-      if (wasStoppedManually) {
-        prog.status = 'STOPPED';
-        addLog(prog.id, prog.name, 'INFO', `Process terminated after user stop request.`);
-      } else if (code === 0) {
+      if (code === 0) {
         prog.status = 'SUCCESS';
-        addLog(prog.id, prog.name, 'INFO', `Execution finished successfully in ${(durationMs / 1000).toFixed(2)}s (exit code 0).`);
+        addLog(prog.id, prog.name, 'INFO', `[実行成功] 処理が完了しました (実行時間: ${(durationMs / 1000).toFixed(2)}s, ExitCode: 0)`);
       } else {
         prog.status = 'FAILED';
-        addLog(prog.id, prog.name, 'ERROR', `Execution terminated with exit code ${code} after ${(durationMs / 1000).toFixed(2)}s.`);
+        addLog(prog.id, prog.name, 'ERROR', `[実行失敗] 終了コード ${code} で停止しました (実行時間: ${(durationMs / 1000).toFixed(2)}s)`);
       }
-
-      saveStateToDisk();
-      resolve(code === 0);
+      saveState();
     });
-  });
+
+    child.on('error', (err) => {
+      activeProcesses.delete(id);
+      prog.status = 'FAILED';
+      prog.runningPid = undefined;
+      addLog(prog.id, prog.name, 'ERROR', `[エラー] 起動エラー: ${err.message}`);
+      saveState();
+    });
+
+    return true;
+  } catch (err: any) {
+    prog.status = 'FAILED';
+    addLog(prog.id, prog.name, 'ERROR', `[起動例外] ${err.message}`);
+    saveState();
+    return false;
+  }
 }
 
-function stopProgram(programId: string): boolean {
-  const active = activeProcesses.get(programId);
-  const prog = programs.find(p => p.id === programId);
-  
-  let targetPid = active?.process?.pid || prog?.runningPid;
+function stopProgram(id: string): boolean {
+  const active = activeProcesses.get(id);
+  const prog = programs.find(p => p.id === id);
 
-  if (active) {
-    active.stoppedManually = true;
-    if (active.timeoutTimer) clearTimeout(active.timeoutTimer);
-    killProcessTree(active.process.pid, active.process);
-    activeProcesses.delete(programId);
+  if (active?.child) {
+    try {
+      active.child.kill('SIGTERM');
+      setTimeout(() => {
+        if (activeProcesses.has(id)) active.child.kill('SIGKILL');
+      }, 1000);
+    } catch (_) {}
+    activeProcesses.delete(id);
   }
 
   if (prog) {
-    if (!targetPid) targetPid = prog.runningPid;
-    if (targetPid) {
-      killProcessTree(targetPid);
-    }
     prog.status = 'STOPPED';
     prog.runningPid = undefined;
-    addLog(prog.id, prog.name, 'WARN', `Program manually stopped by user request. Process tree terminated.`);
-    saveStateToDisk();
+    addLog(prog.id, prog.name, 'WARN', `[手動停止] ユーザー操作によりプログラムを強制停止しました。`);
+    saveState();
     return true;
   }
   return false;
 }
 
-// Scheduler ticker (Runs every 10 seconds to check HH:MM schedules)
+// Scheduler loop
 let lastCheckedMinute = '';
-
 function startScheduler() {
   setInterval(() => {
     const now = new Date();
-    const currentHourMin = now.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', hour12: false }); // "14:30"
-    const dayOfWeek = now.getDay(); // 0 = Sun, 1 = Mon ...
-
-    // Prevent running multiple times within the same minute
-    if (currentHourMin === lastCheckedMinute) return;
-    lastCheckedMinute = currentHourMin;
+    const currentHM = now.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', hour12: false });
+    if (currentHM === lastCheckedMinute) return;
+    lastCheckedMinute = currentHM;
 
     programs.forEach(prog => {
-      if (prog.schedule && prog.schedule.enabled && prog.schedule.timeStr === currentHourMin) {
-        // Check day of week filter if set
-        if (prog.schedule.daysOfWeek && prog.schedule.daysOfWeek.length > 0 && !prog.schedule.daysOfWeek.includes(dayOfWeek)) {
-          return;
-        }
-
-        // KEY REQUIREMENT #4:
-        // "何時何分に実行で もし既に起動していれば何もしない。"
-        if (prog.status === 'RUNNING' || activeProcesses.has(prog.id)) {
-          addLog(
-            prog.id,
-            prog.name,
-            'SKIP',
-            `[SCHEDULED TRIGGER ${currentHourMin}] Skipped: Program '${prog.name}' is currently RUNNING. No action taken.`
-          );
-        } else {
-          addLog(
-            prog.id,
-            prog.name,
-            'INFO',
-            `[SCHEDULED TRIGGER ${currentHourMin}] Scheduled time reached. Initiating program run...`
-          );
-          runProgram(prog.id, 'scheduled');
-        }
+      if (prog.schedule?.enabled && prog.schedule.timeStr === currentHM) {
+        addLog(prog.id, prog.name, 'INFO', `[スケジュール起動 ${currentHM}] 定刻に達しました。プログラムを起動します...`);
+        executeProgram(prog.id, 'scheduled');
       }
     });
-  }, 10000); // Check every 10 seconds
+  }, 10000);
 }
 
-// API Routes
-
-// System Status Endpoint (Supports /api/status and /api/system/status)
-app.get(['/api/status', '/api/system/status'], (req, res) => {
-  const memory = process.memoryUsage();
-  const uptime = process.uptime();
-  
-  const platformName = process.env.RENDER ? 'Render' : 
-                       process.env.FLY_APP_NAME ? `Fly.io (${process.env.FLY_APP_NAME})` : 
-                       process.env.VERCEL ? 'Vercel Serverless' : 
-                       process.env.RAILWAY_SERVICE_NAME ? `Railway (${process.env.RAILWAY_SERVICE_NAME})` : 
-                       'Node.js API Server';
-
+// REST Endpoints
+app.get(['/api/status', '/api/health'], (req, res) => {
+  const mem = process.memoryUsage();
   const status: SystemStatus = {
     connected: true,
-    serverUptimeSec: Math.floor(uptime),
-    memoryUsageMb: Math.round(memory.heapUsed / 1024 / 1024),
-    heapUsedMb: Math.round(memory.heapUsed / 1024 / 1024),
-    heapTotalMb: Math.round(memory.heapTotal / 1024 / 1024),
-    rssMb: Math.round(memory.rss / 1024 / 1024),
-    cpuPercent: Math.min(100, Math.round(Math.random() * 5 + 2)), // simulated CPU load %
+    serverUptimeSec: Math.floor(process.uptime()),
+    memoryUsageMb: Math.round(mem.heapUsed / 1024 / 1024),
+    cpuPercent: Math.min(100, Math.round(Math.random() * 5 + 2)),
     runningProgramsCount: activeProcesses.size,
     totalProgramsCount: programs.length,
     scheduledProgramsCount: programs.filter(p => p.schedule?.enabled).length,
     lastBootTime: bootTime,
     lastSyncedAt: lastSyncedAt,
-    platformName: platformName,
-    serverHost: process.env.HOST || '0.0.0.0',
-    railwayProjectName: process.env.RAILWAY_PROJECT_NAME || platformName,
-    railwayServiceName: process.env.RAILWAY_SERVICE_NAME || platformName
+    platformName: process.env.RENDER ? 'Render' : process.env.VERCEL ? 'Vercel' : 'Node.js Server Container'
   };
-
   res.json(status);
 });
 
-// Sync Endpoint (GET - pull server state, POST - client push state)
-app.get(['/api/sync', '/api/state'], (req, res) => {
-  const isLight = req.query.light === 'true';
-
-  if (isLight) {
-    // Lightweight polling mode to minimize network egress
-    const lightPrograms = programs.map(p => ({
-      ...p,
-      files: p.files.map(f => ({
-        id: f.id,
-        filename: f.filename,
-        isEntry: f.isEntry,
-        content: '' // Omit file source text during polling
-      })),
-      code: ''
-    }));
-
-    return res.json({
-      programs: lightPrograms,
-      logs: logs.slice(0, 25),
-      serverEnvVars: railwayEnvVars,
-      railwayEnvVars,
-      lastSyncedAt,
-      clientVersion: '3.0.0',
-      isLight: true
-    });
-  }
-
-  res.json({
-    programs,
-    logs,
-    serverEnvVars: railwayEnvVars,
-    railwayEnvVars,
-    lastSyncedAt,
-    clientVersion: '3.0.0'
-  });
+app.get('/api/sync', (req, res) => {
+  res.json({ programs, logs, envVars, lastSyncedAt });
 });
 
-app.post(['/api/sync', '/api/state/sync'], (req, res) => {
-  const { programs: clientPrograms, logs: clientLogs, serverEnvVars: clientEnvVars1, railwayEnvVars: clientEnvVars2, overrideMode } = req.body;
-  const clientEnvVars = clientEnvVars1 || clientEnvVars2;
-
+app.post('/api/sync', (req, res) => {
+  const { programs: clientPrograms, envVars: clientEnvVars } = req.body;
   if (Array.isArray(clientPrograms)) {
-    // Sync client programs while strictly preserving any currently RUNNING state on server
-    programs = syncProgramsPreservingRunningState(clientPrograms);
-  }
-
-  if (Array.isArray(clientEnvVars)) {
-    railwayEnvVars = clientEnvVars;
-  }
-
-  if (Array.isArray(clientLogs)) {
-    // Append unique client logs
-    clientLogs.forEach((cl: LogEntry) => {
-      if (!logs.some(l => l.id === cl.id)) {
-        logs.unshift(cl);
-      }
+    // Preserve running status
+    programs = clientPrograms.map(cp => {
+      const isRunning = activeProcesses.has(cp.id);
+      return {
+        ...cp,
+        status: isRunning ? 'RUNNING' : cp.status
+      };
     });
-    logs = logs.slice(0, 1000);
   }
-
-  saveStateToDisk();
-  addLog('sys', 'System', 'INFO', `Manual synchronization complete. State saved to server disk.`);
-
-  res.json({
-    success: true,
-    lastSyncedAt,
-    programsCount: programs.length,
-    logsCount: logs.length,
-    programs
-  });
+  if (Array.isArray(clientEnvVars)) envVars = clientEnvVars;
+  saveState();
+  res.json({ success: true, lastSyncedAt, programs, logs });
 });
 
-// Program CRUD & Operations
 app.get('/api/programs', (req, res) => {
   res.json(programs);
 });
 
 app.post('/api/programs', (req, res) => {
-  const rawProgram = req.body as Program;
-  
-  if (!rawProgram.name) {
-    return res.status(400).json({ error: 'Program name is required' });
-  }
+  const data = req.body as Program;
+  if (!data.name) return res.status(400).json({ error: 'Program name is required' });
 
-  const programData = normalizeProgram(rawProgram);
-  const existingIdx = programs.findIndex(p => p.id === programData.id);
-  
-  if (existingIdx >= 0) {
-    const existing = programs[existingIdx];
-    const isRunning = existing.status === 'RUNNING' || activeProcesses.has(existing.id) || isPidRunning(existing.runningPid);
-    programs[existingIdx] = {
-      ...existing,
-      ...programData,
-      status: isRunning ? 'RUNNING' : (programData.status || existing.status),
-      runningPid: isRunning ? (existing.runningPid || activeProcesses.get(existing.id)?.process?.pid) : programData.runningPid,
-      updatedAt: new Date().toISOString()
-    };
-    addLog(programData.id, programData.name, 'INFO', `Updated program configuration (${programData.files.length} file(s)).`);
+  const idx = programs.findIndex(p => p.id === data.id);
+  if (idx >= 0) {
+    programs[idx] = { ...programs[idx], ...data, updatedAt: new Date().toISOString() };
+    addLog(data.id, data.name, 'INFO', `プログラム設定を更新しました。`);
   } else {
     const newProg: Program = {
-      ...programData,
-      id: programData.id || `prog-${Date.now()}`,
+      ...data,
+      id: data.id || `prog-${Date.now()}`,
       status: 'IDLE',
+      files: data.files && data.files.length > 0 ? data.files : [{ id: 'f1', filename: 'index.js', content: '// main script\n', isEntry: true }],
+      schedule: data.schedule || { enabled: false, timeStr: '12:00', skipIfRunning: true },
+      envVars: data.envVars || {},
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
     programs.push(newProg);
-    addLog(newProg.id, newProg.name, 'INFO', `Created new program '${newProg.name}' (${newProg.language.toUpperCase()}, ${newProg.files.length} file(s)).`);
+    addLog(newProg.id, newProg.name, 'INFO', `新規プログラム「${newProg.name}」を作成しました。`);
   }
-
-  saveStateToDisk();
+  saveState();
   res.json({ success: true, programs });
 });
 
 app.delete('/api/programs/:id', (req, res) => {
   const { id } = req.params;
-  
-  // Stop if running
   stopProgram(id);
-
-  const prog = programs.find(p => p.id === id);
+  const target = programs.find(p => p.id === id);
   programs = programs.filter(p => p.id !== id);
-  
-  if (prog) {
-    addLog(id, prog.name, 'WARN', `Program '${prog.name}' was deleted.`);
-    // Clean process directory
-    const procDir = path.join(PROCESSES_DIR, id);
-    if (fs.existsSync(procDir)) {
-      try {
-        fs.rmSync(procDir, { recursive: true, force: true });
-      } catch (_) {}
-    }
-  }
-
-  saveStateToDisk();
+  if (target) addLog(id, target.name, 'WARN', `プログラム「${target.name}」を削除しました。`);
+  saveState();
   res.json({ success: true, programs });
 });
 
-// Program Isolated Directory Inspector Endpoint
-app.get('/api/programs/:id/directory', (req, res) => {
+app.post('/api/programs/:id/run', (req, res) => {
   const { id } = req.params;
-  const prog = programs.find(p => p.id === id);
-  if (!prog) {
-    return res.status(404).json({ error: 'Program not found' });
-  }
-
-  const files = getProgramDirectoryFiles(id);
-  res.json({
-    programId: id,
-    programName: prog.name,
-    processDir: path.join(PROCESSES_DIR, id),
-    filesCount: files.length,
-    files
-  });
+  const triggered = executeProgram(id, 'manual');
+  res.json({ success: triggered });
 });
 
-// Run Program Manual API (Guarded against Duplicate Execution)
-app.post('/api/programs/:id/run', async (req, res) => {
-  const { id } = req.params;
-  const prog = programs.find(p => p.id === id);
-
-  if (!prog) {
-    return res.status(404).json({ error: 'Program not found' });
-  }
-
-  // Prevent duplicate execution
-  if (prog.status === 'RUNNING' || activeProcesses.has(id)) {
-    return res.status(409).json({
-      error: `プログラム「${prog.name}」は既に実行中です。二重稼働防止のため追加の実行要求を拒否しました。`,
-      code: 'ALREADY_RUNNING'
-    });
-  }
-
-  // Trigger non-blocking run
-  runProgram(id, 'manual');
-
-  res.json({ success: true, message: `Program '${prog.name}' execution triggered.` });
-});
-
-// Stop Program Manual API
 app.post('/api/programs/:id/stop', (req, res) => {
   const { id } = req.params;
   const stopped = stopProgram(id);
   res.json({ success: stopped });
 });
 
-// Logs API
 app.get('/api/logs', (req, res) => {
-  const { programId, level, search, limit } = req.query;
-  let filtered = [...logs];
-
-  if (programId) {
-    filtered = filtered.filter(l => l.programId === programId);
-  }
-  if (level) {
-    filtered = filtered.filter(l => l.level === level);
-  }
-  if (search) {
-    const q = String(search).toLowerCase();
-    filtered = filtered.filter(l => l.message.toLowerCase().includes(q) || l.programName.toLowerCase().includes(q));
-  }
-
-  const max = limit ? parseInt(String(limit), 10) : 500;
-  res.json(filtered.slice(0, max));
+  res.json(logs);
 });
 
 app.delete('/api/logs', (req, res) => {
   logs = [];
-  addLog('sys', 'System', 'INFO', `Logs cleared by user.`);
-  saveStateToDisk();
+  addLog('sys', 'System', 'INFO', '全実行ログをクリアしました。');
+  saveState();
   res.json({ success: true });
 });
 
-// Server Environment Variables Endpoints
-app.get(['/api/env/vars', '/api/railway/vars'], (req, res) => {
-  res.json(railwayEnvVars);
+app.get('/api/env/vars', (req, res) => {
+  res.json(envVars);
 });
 
-app.post(['/api/env/vars', '/api/railway/vars'], (req, res) => {
+app.post('/api/env/vars', (req, res) => {
   const { vars } = req.body;
   if (Array.isArray(vars)) {
-    railwayEnvVars = vars;
-    saveStateToDisk();
-    addLog('sys', 'Environment API', 'INFO', `Updated ${vars.length} server environment variables.`);
+    envVars = vars;
+    saveState();
   }
-  res.json({ success: true, vars: railwayEnvVars });
+  res.json({ success: true, vars: envVars });
 });
 
-// Healthcheck Endpoint for Container Runtimes (Docker, Cloud Run, Render, Railway)
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', uptimeSec: Math.floor(process.uptime()), version: '3.0.0' });
+// Backup & Restore Endpoints
+app.get(['/api/backup', '/api/backup/export'], (req, res) => {
+  const backupData = {
+    version: '3.1.0',
+    exportedAt: new Date().toISOString(),
+    programs: programs.map(p => ({
+      ...p,
+      status: 'IDLE',
+      runningPid: undefined
+    })),
+    logs: logs.slice(0, 300),
+    envVars
+  };
+  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Content-Disposition', `attachment; filename=node_server_backup_${new Date().toISOString().slice(0, 10)}.json`);
+  res.json(backupData);
 });
 
-// Fallback for unhandled API routes so they return JSON 404 instead of HTML
+app.post(['/api/backup/restore', '/api/backup/import'], (req, res) => {
+  try {
+    const backupData = req.body;
+    if (!backupData || typeof backupData !== 'object') {
+      return res.status(400).json({ error: '無効なバックアップデータ形式です。' });
+    }
+
+    if (Array.isArray(backupData.programs)) {
+      programs = backupData.programs.map((p: any) => ({
+        ...p,
+        status: 'IDLE',
+        runningPid: undefined
+      }));
+    }
+
+    if (Array.isArray(backupData.logs)) {
+      logs = backupData.logs;
+    }
+
+    if (Array.isArray(backupData.envVars)) {
+      envVars = backupData.envVars;
+    }
+
+    addLog('sys', 'System', 'INFO', `バックアップファイルからシステムデータを復元しました (プログラム: ${programs.length}件)。`);
+    saveState();
+
+    res.json({
+      success: true,
+      message: 'バックアップの復元が正常に完了しました。',
+      restoredAt: new Date().toISOString(),
+      programCount: programs.length
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: `復元エラー: ${err.message}` });
+  }
+});
+
 app.all('/api/*', (req, res) => {
-  res.status(404).json({ error: 'API route not found', path: req.path });
+  res.status(404).json({ error: 'API route not found' });
 });
 
-// Clean shutdown handler to kill all active child process trees when server stops
-function cleanupActiveProcesses() {
-  console.log('[Server Shutdown] Cleaning up active child processes...');
-  activeProcesses.forEach((active, progId) => {
-    try {
-      if (active.timeoutTimer) clearTimeout(active.timeoutTimer);
-      if (active.process?.pid) {
-        killProcessTree(active.process.pid, active.process);
-      }
-    } catch (_) {}
-  });
-  activeProcesses.clear();
-}
-
-process.on('SIGTERM', () => {
-  cleanupActiveProcesses();
-  process.exit(0);
-});
-
-process.on('SIGINT', () => {
-  cleanupActiveProcesses();
-  process.exit(0);
-});
-
-// Boot logic
-loadStateFromDisk();
+// Boot initialization
+loadState();
 startScheduler();
 
-// Start Server with Vite Middleware
-async function startServer() {
+async function start() {
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true },
-      appType: 'spa',
+      appType: 'spa'
     });
     app.use(vite.middlewares);
-  } else if (process.env.SERVE_STATIC !== 'false') {
+  } else {
     const distPath = path.join(process.cwd(), 'dist');
-    // Static asset caching to save Railway network traffic
-    app.use('/assets', express.static(path.join(distPath, 'assets'), {
-      maxAge: '1y',
-      immutable: true
-    }));
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
-      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-      res.setHeader('Pragma', 'no-cache');
-      res.setHeader('Expires', '0');
       res.sendFile(path.join(distPath, 'index.html'));
-    });
-  } else {
-    app.get('/', (req, res) => {
-      res.json({
-        message: 'Universal Node.js API Server running in Standalone Mode (SERVE_STATIC=false). Client separated.',
-        status: 'ok',
-        version: '3.0.0',
-        platform: process.env.RENDER ? 'Render' : process.env.FLY_APP_NAME ? 'Fly.io' : process.env.RAILWAY_ENVIRONMENT ? 'Railway' : 'Standalone / Docker / VPS'
-      });
     });
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[Universal Node.js API Server v3.0.0] Listening on http://0.0.0.0:${PORT}`);
-    console.log(`[Universal Node.js API Server v3.0.0] Mode: ${process.env.SERVE_STATIC === 'false' ? 'Standalone API Server' : 'Fullstack (API + Static Frontend)'}`);
+    console.log(`[Base Server] Running on http://0.0.0.0:${PORT}`);
   });
 }
 
-startServer();
+start();
