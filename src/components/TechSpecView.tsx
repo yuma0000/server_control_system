@@ -321,6 +321,24 @@ docker compose up -d --build
             </div>
           </div>
         </div>
+
+        {/* Troubleshooting Notice for Render / Vercel Reconnection */}
+        <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-200 space-y-2 text-xs">
+          <h4 className="font-bold text-amber-300 flex items-center gap-1.5 text-sm">
+            <span>⚠️ Render や Vercel で「再接続中」と表示される原因と即時解消手順</span>
+          </h4>
+          <ul className="list-disc list-inside space-y-1.5 text-amber-100/90 leading-relaxed">
+            <li>
+              <strong>Render のコールドスタート（スリープ自動復帰）:</strong> Render Free プランは15分間無アクセスで休止します。アクセス直後はコンテナ起動に <strong>30〜60秒</strong> かかります。起動後、自動的に接続完了となります。
+            </li>
+            <li>
+              <strong>Vercel 配信時の API URL 未設定:</strong> Vercel は静的 Web 画面のみ配信するため、Vercel 上の URL（例: <code className="bg-amber-950/80 px-1 py-0.5 rounded text-amber-300">https://your-app.vercel.app</code>）単体ではバックエンド API が動作しません。
+            </li>
+            <li>
+              <strong>解消手順:</strong> ヘッダーの「再接続中」バッジまたは「同期マネージャー」タブをクリックし、Render 等で起動した API サーバーの URL（例: <code className="bg-amber-950/80 px-1 py-0.5 rounded text-amber-300 font-mono">https://my-backend.onrender.com</code>）を入力して保存するか、Vercel の環境変数に <code className="bg-amber-950/80 px-1 py-0.5 rounded text-amber-300 font-mono">VITE_API_URL</code> を設定してください。
+            </li>
+          </ul>
+        </div>
       </div>
 
       {/* REST API Endpoints Specification */}

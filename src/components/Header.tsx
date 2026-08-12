@@ -8,6 +8,7 @@ interface HeaderProps {
   systemStatus: SystemStatus | null;
   onRefresh: () => void;
   onOpenCreateModal: () => void;
+  onOpenSyncSettings?: () => void;
   isSyncing: boolean;
   onMenuToggle?: () => void;
 }
@@ -18,6 +19,7 @@ export const Header: React.FC<HeaderProps> = ({
   systemStatus,
   onRefresh,
   onOpenCreateModal,
+  onOpenSyncSettings,
   isSyncing,
   onMenuToggle
 }) => {
@@ -61,22 +63,28 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
 
         {/* Sync Status Badge & Version */}
-        <div className="flex items-center space-x-1.5 bg-slate-800/80 px-2.5 sm:px-3 py-1.5 rounded-lg border border-slate-700/60 text-xs">
+        <button
+          onClick={onOpenSyncSettings}
+          className="flex items-center space-x-1.5 bg-slate-800/80 hover:bg-slate-700/80 px-2.5 sm:px-3 py-1.5 rounded-lg border border-slate-700/60 text-xs transition-all text-left"
+          title="クリックで API サーバー接続先設定を開きます"
+        >
           {systemStatus?.connected ? (
             <>
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              <span className="text-slate-200 font-medium hidden md:inline">API サーバー 接続中</span>
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+              <span className="text-slate-200 font-medium hidden md:inline">API サーバー 接続完了</span>
             </>
           ) : (
             <>
-              <AlertCircle className="w-3.5 h-3.5 text-amber-400" />
-              <span className="text-amber-400 font-medium">再接続中...</span>
+              <AlertCircle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              <span className="text-amber-400 font-medium truncate max-w-[120px] sm:max-w-none">
+                再接続中 / 設定要
+              </span>
             </>
           )}
-          <span className="ml-1 text-[10px] font-mono px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-bold">
+          <span className="ml-1 text-[10px] font-mono px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-bold shrink-0">
             v3.0.0
           </span>
-        </div>
+        </button>
 
         {/* Manual Sync / Refresh Button */}
         <button

@@ -20,9 +20,28 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<string>('dashboard');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState<boolean>(false);
 
-  const [programs, setPrograms] = useState<Program[]>([]);
+  const [programs, setPrograms] = useState<Program[]>(() => {
+    try {
+      const cached = localStorage.getItem(LOCAL_STORAGE_KEY);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed.programs)) return parsed.programs;
+      }
+    } catch (_) {}
+    return [];
+  });
   const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [railwayEnvVars, setRailwayEnvVars] = useState<ServerEnvVar[]>([]);
+  const [railwayEnvVars, setRailwayEnvVars] = useState<ServerEnvVar[]>(() => {
+    try {
+      const cached = localStorage.getItem(LOCAL_STORAGE_KEY);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        const vars = parsed.serverEnvVars || parsed.railwayEnvVars;
+        if (Array.isArray(vars)) return vars;
+      }
+    } catch (_) {}
+    return [];
+  });
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<string>('');
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
@@ -30,7 +49,12 @@ export default function App() {
 
   // Network Optimization & Separation States
   const [customApiBaseUrl, setCustomApiBaseUrl] = useState<string>(() => {
-    return localStorage.getItem(API_BASE_URL_KEY) || localStorage.getItem('RAILWAY_CUSTOM_API_BASE_URL') || '';
+    const metaEnv = (import.meta as any).env || {};
+    return localStorage.getItem(API_BASE_URL_KEY) || 
+           localStorage.getItem('RAILWAY_CUSTOM_API_BASE_URL') || 
+           (metaEnv.VITE_API_URL as string) || 
+           (metaEnv.VITE_SERVER_URL as string) || 
+           '';
   });
   const [pollIntervalSec, setPollIntervalSec] = useState<number>(() => {
     const val = localStorage.getItem(POLL_INTERVAL_KEY) || localStorage.getItem('RAILWAY_POLL_INTERVAL_SEC');
@@ -73,13 +97,16 @@ export default function App() {
     try {
       const syncPath = `/api/sync${useLightSync ? '?light=true' : ''}`;
       const [syncRes, statusRes] = await Promise.all([
-        fetch(getApiUrl(syncPath)),
-        fetch(getApiUrl('/api/status'))
+        fetch(getApiUrl(syncPath)).catch(() => new Response(null, { status: 500 })),
+        fetch(getApiUrl('/api/status')).catch(() => new Response(null, { status: 500 }))
       ]);
 
-      const isSyncJson = syncRes.ok && syncRes.headers.get('content-type')?.includes('application/json');
-      if (isSyncJson) {
+      let syncSuccess = false;
+      let statusSuccess = false;
+
+      if (syncRes.ok && syncRes.headers.get('content-type')?.includes('application/json')) {
         const syncData = await syncRes.json();
+        syncSuccess = true;
         if (Array.isArray(syncData.programs)) {
           if (syncData.isLight) {
             setPrograms(prev => syncData.programs.map((lp: Program) => {
@@ -113,14 +140,46 @@ export default function App() {
         }));
       }
 
-      const isStatusJson = statusRes.ok && statusRes.headers.get('content-type')?.includes('application/json');
-      if (isStatusJson) {
+      if (statusRes.ok && statusRes.headers.get('content-type')?.includes('application/json')) {
         const statusData = await statusRes.json();
-        setSystemStatus(statusData);
+        statusSuccess = true;
+        setSystemStatus({ ...statusData, connected: true });
+      }
+
+      if (!statusSuccess && !syncSuccess) {
+        setSystemStatus(prev => ({
+          connected: false,
+          serverUptimeSec: prev?.serverUptimeSec || 0,
+          memoryUsageMb: prev?.memoryUsageMb || 0,
+          heapUsedMb: prev?.heapUsedMb || 0,
+          heapTotalMb: prev?.heapTotalMb || 0,
+          rssMb: prev?.rssMb || 0,
+          cpuPercent: prev?.cpuPercent || 0,
+          runningProgramsCount: prev?.runningProgramsCount || 0,
+          totalProgramsCount: prev?.totalProgramsCount || 0,
+          scheduledProgramsCount: prev?.scheduledProgramsCount || 0,
+          lastBootTime: prev?.lastBootTime || '',
+          lastSyncedAt: prev?.lastSyncedAt || '',
+          platformName: '未接続 / オフライン'
+        }));
       }
     } catch (err) {
       console.error('Error fetching state from backend:', err);
-      setSystemStatus(prev => prev ? { ...prev, connected: false } : null);
+      setSystemStatus(prev => ({
+        connected: false,
+        serverUptimeSec: prev?.serverUptimeSec || 0,
+        memoryUsageMb: prev?.memoryUsageMb || 0,
+        heapUsedMb: prev?.heapUsedMb || 0,
+        heapTotalMb: prev?.heapTotalMb || 0,
+        rssMb: prev?.rssMb || 0,
+        cpuPercent: prev?.cpuPercent || 0,
+        runningProgramsCount: prev?.runningProgramsCount || 0,
+        totalProgramsCount: prev?.totalProgramsCount || 0,
+        scheduledProgramsCount: prev?.scheduledProgramsCount || 0,
+        lastBootTime: prev?.lastBootTime || '',
+        lastSyncedAt: prev?.lastSyncedAt || '',
+        platformName: '未接続 / オフライン'
+      }));
     }
   }, [getApiUrl, useLightSync]);
 
@@ -131,13 +190,15 @@ export default function App() {
       
       try {
         const [syncRes, statusRes] = await Promise.all([
-          fetch(getApiUrl('/api/sync')),
-          fetch(getApiUrl('/api/status'))
+          fetch(getApiUrl('/api/sync')).catch(() => new Response(null, { status: 500 })),
+          fetch(getApiUrl('/api/status')).catch(() => new Response(null, { status: 500 }))
         ]);
 
-        const isSyncJson = syncRes.ok && syncRes.headers.get('content-type')?.includes('application/json');
-        if (isSyncJson) {
+        let success = false;
+
+        if (syncRes.ok && syncRes.headers.get('content-type')?.includes('application/json')) {
           const syncData = await syncRes.json();
+          success = true;
           if (Array.isArray(syncData.programs)) setPrograms(syncData.programs);
           if (Array.isArray(syncData.logs)) setLogs(syncData.logs);
           const vars = syncData.serverEnvVars || syncData.railwayEnvVars;
@@ -151,13 +212,46 @@ export default function App() {
           }));
         }
 
-        const isStatusJson = statusRes.ok && statusRes.headers.get('content-type')?.includes('application/json');
-        if (isStatusJson) {
+        if (statusRes.ok && statusRes.headers.get('content-type')?.includes('application/json')) {
           const statusData = await statusRes.json();
-          setSystemStatus(statusData);
+          success = true;
+          setSystemStatus({ ...statusData, connected: true });
+        }
+
+        if (!success) {
+          setSystemStatus({
+            connected: false,
+            serverUptimeSec: 0,
+            memoryUsageMb: 0,
+            heapUsedMb: 0,
+            heapTotalMb: 0,
+            rssMb: 0,
+            cpuPercent: 0,
+            runningProgramsCount: 0,
+            totalProgramsCount: programs.length,
+            scheduledProgramsCount: 0,
+            lastBootTime: '',
+            lastSyncedAt: '',
+            platformName: '未接続 / オフライン'
+          });
         }
       } catch (err) {
         console.error('Error during init boot sync:', err);
+        setSystemStatus({
+          connected: false,
+          serverUptimeSec: 0,
+          memoryUsageMb: 0,
+          heapUsedMb: 0,
+          heapTotalMb: 0,
+          rssMb: 0,
+          cpuPercent: 0,
+          runningProgramsCount: 0,
+          totalProgramsCount: programs.length,
+          scheduledProgramsCount: 0,
+          lastBootTime: '',
+          lastSyncedAt: '',
+          platformName: '未接続 / オフライン'
+        });
       } finally {
         setIsSyncing(false);
       }
@@ -380,9 +474,37 @@ export default function App() {
           systemStatus={systemStatus}
           onRefresh={handleManualSync}
           onOpenCreateModal={() => handleOpenEditModal(null)}
+          onOpenSyncSettings={() => setActiveTab('sync')}
           isSyncing={isSyncing}
           onMenuToggle={() => setIsMobileMenuOpen(true)}
         />
+
+        {/* Reconnecting / Offline Helper Banner */}
+        {systemStatus && !systemStatus.connected && (
+          <div className="bg-amber-500/10 border-b border-amber-500/20 px-4 py-2.5 flex flex-col sm:flex-row items-start sm:items-center justify-between text-xs text-amber-200 gap-2 shrink-0 animate-fadeIn">
+            <div className="flex items-center space-x-2">
+              <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping shrink-0" />
+              <span>
+                <strong>再接続中 / API未接続:</strong> Render のコールドスタート（起動待ち 30〜60秒）または Vercel から Render サーバー（例: <code className="bg-amber-950/60 px-1 py-0.5 rounded text-amber-300 font-mono">https://my-app.onrender.com</code>）への URL 設定が必要です。
+              </span>
+            </div>
+            <div className="flex items-center space-x-2 shrink-0 w-full sm:w-auto justify-end">
+              <button
+                onClick={() => setActiveTab('sync')}
+                className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium shadow-sm transition-all text-xs"
+              >
+                接続先 API URL を設定
+              </button>
+              <button
+                onClick={handleManualSync}
+                disabled={isSyncing}
+                className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium border border-slate-700 transition-all text-xs disabled:opacity-50"
+              >
+                {isSyncing ? '同期中...' : '再接続試行'}
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Dynamic View Tab Rendering */}
         <main className="flex-1 overflow-y-auto bg-slate-950/90 p-3 sm:p-6">
