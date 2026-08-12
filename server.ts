@@ -18,7 +18,7 @@ app.use((req, res, next) => {
   const origin = req.headers.origin || '*';
   res.setHeader('Access-Control-Allow-Origin', origin);
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   if (req.method === 'OPTIONS') {
     return res.status(204).end();
@@ -821,6 +821,11 @@ app.post(['/api/env/vars', '/api/railway/vars'], (req, res) => {
 // Healthcheck Endpoint for Container Runtimes (Docker, Cloud Run, Render, Railway)
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', uptimeSec: Math.floor(process.uptime()), version: '3.0.0' });
+});
+
+// Fallback for unhandled API routes so they return JSON 404 instead of HTML
+app.all('/api/*', (req, res) => {
+  res.status(404).json({ error: 'API route not found', path: req.path });
 });
 
 // Clean shutdown handler to kill all active child process trees when server stops

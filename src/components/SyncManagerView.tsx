@@ -62,10 +62,12 @@ export const SyncManagerView: React.FC<SyncManagerViewProps> = ({
     setTimeout(() => setSyncSuccessMsg(null), 4000);
   };
 
-  const handleApplyApiUrl = () => {
+  const handleApplyApiUrl = async () => {
     onSaveApiBaseUrl(tempApiUrl);
-    setUrlSaveMsg('API接続先URLを更新しました。設定はローカルに保存されました。');
-    setTimeout(() => setUrlSaveMsg(null), 3000);
+    setUrlSaveMsg('接続先 URL を更新しました。サーバー接続確認中...');
+    await onSync();
+    setUrlSaveMsg('接続先 URL の設定および API サーバーとの通信が成功しました！');
+    setTimeout(() => setUrlSaveMsg(null), 4000);
   };
 
   return (

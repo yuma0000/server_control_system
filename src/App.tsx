@@ -71,10 +71,43 @@ export default function App() {
 
   // Helper to format endpoint with custom API server URL
   const getApiUrl = useCallback((path: string) => {
-    const base = customApiBaseUrl.trim().replace(/\/+$/, '');
-    if (!base) return path;
-    return `${base}${path.startsWith('/') ? path : '/' + path}`;
+    let base = customApiBaseUrl.trim().replace(/\/+$/, '');
+    if (!base) {
+      return path.startsWith('/') ? path : '/' + path;
+    }
+
+    // Auto-prefix protocol if missing
+    if (!base.startsWith('http://') && !base.startsWith('https://')) {
+      base = `https://${base}`;
+    }
+
+    // Auto-upgrade http:// to https:// on https pages to avoid browser Mixed Content blocking
+    if (typeof window !== 'undefined' && window.location.protocol === 'https:') {
+      if (base.startsWith('http://') && !base.includes('localhost') && !base.includes('127.0.0.1')) {
+        base = base.replace(/^http:\/\//, 'https://');
+      }
+    }
+
+    const cleanPath = path.startsWith('/') ? path : '/' + path;
+    return `${base}${cleanPath}`;
   }, [customApiBaseUrl]);
+
+  // Safe helper to fetch JSON endpoints without throwing network/cors/syntax errors
+  const safeFetchJson = useCallback(async (path: string) => {
+    try {
+      const url = getApiUrl(path);
+      const res = await fetch(url, {
+        headers: { 'Accept': 'application/json' },
+        cache: 'no-store'
+      });
+      if (!res.ok) return null;
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) return null;
+      return await res.json();
+    } catch (err) {
+      return null;
+    }
+  }, [getApiUrl]);
 
   // Network handlers
   const handleSaveApiBaseUrl = (url: string) => {
@@ -96,16 +129,15 @@ export default function App() {
   const fetchStateFromBackend = useCallback(async () => {
     try {
       const syncPath = `/api/sync${useLightSync ? '?light=true' : ''}`;
-      const [syncRes, statusRes] = await Promise.all([
-        fetch(getApiUrl(syncPath)).catch(() => new Response(null, { status: 500 })),
-        fetch(getApiUrl('/api/status')).catch(() => new Response(null, { status: 500 }))
+      const [syncData, statusData] = await Promise.all([
+        safeFetchJson(syncPath),
+        safeFetchJson('/api/status')
       ]);
 
       let syncSuccess = false;
       let statusSuccess = false;
 
-      if (syncRes.ok && syncRes.headers.get('content-type')?.includes('application/json')) {
-        const syncData = await syncRes.json();
+      if (syncData) {
         syncSuccess = true;
         if (Array.isArray(syncData.programs)) {
           if (syncData.isLight) {
@@ -140,8 +172,7 @@ export default function App() {
         }));
       }
 
-      if (statusRes.ok && statusRes.headers.get('content-type')?.includes('application/json')) {
-        const statusData = await statusRes.json();
+      if (statusData) {
         statusSuccess = true;
         setSystemStatus({ ...statusData, connected: true });
       }
@@ -181,7 +212,7 @@ export default function App() {
         platformName: '未接続 / オフライン'
       }));
     }
-  }, [getApiUrl, useLightSync]);
+  }, [safeFetchJson, useLightSync]);
 
   // Initial Sync & Boot Logic
   useEffect(() => {
@@ -189,15 +220,14 @@ export default function App() {
       setIsSyncing(true);
       
       try {
-        const [syncRes, statusRes] = await Promise.all([
-          fetch(getApiUrl('/api/sync')).catch(() => new Response(null, { status: 500 })),
-          fetch(getApiUrl('/api/status')).catch(() => new Response(null, { status: 500 }))
+        const [syncData, statusData] = await Promise.all([
+          safeFetchJson('/api/sync'),
+          safeFetchJson('/api/status')
         ]);
 
         let success = false;
 
-        if (syncRes.ok && syncRes.headers.get('content-type')?.includes('application/json')) {
-          const syncData = await syncRes.json();
+        if (syncData) {
           success = true;
           if (Array.isArray(syncData.programs)) setPrograms(syncData.programs);
           if (Array.isArray(syncData.logs)) setLogs(syncData.logs);
@@ -212,8 +242,7 @@ export default function App() {
           }));
         }
 
-        if (statusRes.ok && statusRes.headers.get('content-type')?.includes('application/json')) {
-          const statusData = await statusRes.json();
+        if (statusData) {
           success = true;
           setSystemStatus({ ...statusData, connected: true });
         }
@@ -413,7 +442,7 @@ export default function App() {
         if (Array.isArray(data.programs)) {
           setIsSyncing(true);
           const vars = data.serverEnvVars || data.railwayEnvVars || [];
-          await fetch('/api/sync', {
+          await fetch(getApiUrl('/api/sync'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
