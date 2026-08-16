@@ -7,7 +7,7 @@ import { createServer as createViteServer } from 'vite';
 import { Program, LogEntry, ServerEnvVar, SystemStatus } from './src/types';
 
 const app = express();
-const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+const PORT = parseInt(process.env.PORT || process.env.SERVER_PORT || '3000', 10);
 
 // Enable Compression & CORS
 app.use(compression());
@@ -513,6 +513,7 @@ app.all('/api/*', (req, res) => {
 loadState();
 startScheduler();
 
+// Vite middleware setup
 async function start() {
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
@@ -520,11 +521,34 @@ async function start() {
       appType: 'spa'
     });
     app.use(vite.middlewares);
+    console.log('[Base Server] Running with Vite dev middleware');
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
+    const possibleDistPaths = [
+      path.join(process.cwd(), 'dist'),
+      path.join(__dirname, 'dist'),
+      __dirname
+    ];
+    const distPath = possibleDistPaths.find(p => fs.existsSync(path.join(p, 'index.html'))) || path.join(process.cwd(), 'dist');
+
+    console.log(`[Base Server] Serving static files from: ${distPath}`);
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+      const indexPath = path.join(distPath, 'index.html');
+      if (fs.existsSync(indexPath)) {
+        res.sendFile(indexPath);
+      } else {
+        res.status(200).send(`
+          <!DOCTYPE html>
+          <html>
+            <head><meta charset="utf-8"><title>Server Control System</title></head>
+            <body style="font-family: sans-serif; background: #0f172a; color: #f8fafc; padding: 40px; text-align: center;">
+              <h2>Server Control System API is running!</h2>
+              <p>ポート ${PORT} で正常に稼働しています。</p>
+              <p style="color: #94a3b8; font-size: 14px;">フロントエンド画面を表示するには <code>npm run build</code> を実行して <code>dist/index.html</code> を生成してください。</p>
+            </body>
+          </html>
+        `);
+      }
     });
   }
 
